@@ -2,6 +2,12 @@
 
 All notable changes to FloatNote. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-11-14
+
+### Fixed
+- **"Make smaller" now shrinks the width too.** After the dropdown had been large, text in the "Type a bug" box, a note being edited, or the Copy heading kept it wide, so only the height shrank and the dropdown could hang past the right edge of the screen.
+- The dropdown also stays flush with the top-right corner after changing size.
+
 ## [1.0.0] - 2026-11-13
 
 First public release.
@@ -21,4 +27,5 @@ First public release.
 - `install.sh` as an alternative (per-user install from the source bundle); `floatnote doctor` checks the setup.
 - Privacy by default: notes stay on your computer, files are private to your user, the log never contains note text, and recordings are not kept.
 
+[1.0.1]: https://github.com/akashmony01/FloatNote/releases/tag/v1.0.1
 [1.0.0]: https://github.com/akashmony01/FloatNote/releases/tag/v1.0.0

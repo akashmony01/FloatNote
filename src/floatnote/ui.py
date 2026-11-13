@@ -74,6 +74,19 @@ def _idle(fn, *args):
     GLib.idle_add(call)
 
 
+def _shrinkable(view: Gtk.TextView) -> Gtk.Widget:
+    """Wrap a wrapping TextView so it never holds the window wide.
+
+    GTK3 reports a wrapped TextView's current width as its minimum width, so
+    after the dropdown was large it could not shrink back (only the height did).
+    EXTERNAL keeps the width out of the size request without a scrollbar.
+    """
+    scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.EXTERNAL,
+                                vscrollbar_policy=Gtk.PolicyType.NEVER)
+    scroll.add(view)
+    return scroll
+
+
 def _icon_button(icon: str, tooltip: str, callback) -> Gtk.Button:
     b = Gtk.Button.new_from_icon_name(icon, Gtk.IconSize.BUTTON)
     b.set_relief(Gtk.ReliefStyle.NONE)
@@ -140,7 +153,7 @@ class NoteRow(Gtk.ListBoxRow):
                                    left_margin=6, right_margin=6, top_margin=4, bottom_margin=4)
         self.editor.connect("key-press-event", self._on_key)
         frame = Gtk.Frame()
-        frame.add(self.editor)
+        frame.add(_shrinkable(self.editor))
 
         self.stack = Gtk.Stack(hexpand=True, vhomogeneous=False, interpolate_size=True)
         self.stack.add_named(clicks, "view")
@@ -216,7 +229,7 @@ class MultiEntry(Gtk.Overlay):
         self.view.set_size_request(-1, 44)
         self.view.connect("key-press-event", self._on_key)
         frame = Gtk.Frame()
-        frame.add(self.view)
+        frame.add(_shrinkable(self.view))
         self.add(frame)
         self.placeholder = Gtk.Label(label=placeholder, xalign=0, yalign=0, wrap=True, max_width_chars=1,
                                      hexpand=True, margin_start=8, margin_top=5, margin_end=8)
@@ -558,7 +571,7 @@ class Dropdown(Gtk.Window):
         self.heading_view.set_size_request(-1, 48)
         self.heading_view.get_buffer().connect("changed", lambda *_: self._heading_changed())
         heading_frame = Gtk.Frame(margin_start=8, margin_end=8)
-        heading_frame.add(self.heading_view)
+        heading_frame.add(_shrinkable(self.heading_view))
         page.pack_start(heading_frame, False, False, 0)
         hint = Gtk.Label(label="Leave empty to copy just the numbered list.", xalign=0,
                          margin_start=10, wrap=True, max_width_chars=1)
@@ -829,8 +842,7 @@ class Dropdown(Gtk.Window):
         self.app.settings["expanded"] = self._expanded
         self.app.save_settings()
         self._sync_expand_button()
-        self.resize(*self._size())
-        self._place(None)
+        self._apply_geometry()
 
     def _sync_expand_button(self):
         icon = "view-restore-symbolic" if self._expanded else "view-fullscreen-symbolic"
@@ -846,8 +858,7 @@ class Dropdown(Gtk.Window):
         elif tab:
             self.stack.set_visible_child_name(tab)
         self._had_focus = False
-        self.resize(*self._size())
-        self._place(x)
+        self._apply_geometry()
         self.show()
         self.refresh()
         self._focus()
@@ -876,22 +887,24 @@ class Dropdown(Gtk.Window):
         monitor = display.get_primary_monitor() or display.get_monitor(0)
         return monitor.get_workarea()  # starts just below the top bar
 
-    def _place(self, x: int | None):
-        # Always flush with the top-right corner, right under the top bar.
+    def _apply_geometry(self):
+        """Size the dropdown and put it flush in the top-right corner, under the top bar."""
         area = self._workarea()
-        w, _h = self._size()
+        w, h = self._size()
+        self.resize(w, h)
         self.move(area.x + area.width - w, area.y)
 
     def _snap_right(self):
         """After a resize lands, make sure the right edge still touches the corner."""
-        if not self.get_visible():
+        gdk_window = self.get_window()
+        if not self.get_visible() or gdk_window is None:
             return
         area = self._workarea()
-        x, y = self.get_position()
-        w, _h = self.get_size()
+        _, x, y = gdk_window.get_origin()  # real position (get_position() can be stale)
+        w = gdk_window.get_width()
         target = area.x + area.width - w
         if abs(x - target) > 1 or y != area.y:
-            self.move(target, area.y)
+            gdk_window.move(target, area.y)
 
     def _focus(self):
         # Take focus so clicking elsewhere closes the dropdown. Use the X server
