@@ -1,0 +1,82 @@
+name: Release
+
+# Push a tag like v1.0.0 to publish a GitHub Release:
+#   git tag v1.0.0 && git push origin v1.0.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write  # create the release and upload files
+
+jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+
+  release:
+    needs: tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches the app version
+        run: |
+          VERSION=$(python3 -c "import re; print(re.search(r'__version__ = \"(.+)\"', open('src/floatnote/__init__.py').read()).group(1))")
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match src/floatnote/__init__.py version $VERSION" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Build release files
+        run: |
+          mkdir -p dist
+          # Source bundle with install.sh: download, extract, ./install.sh
+          git archive --format=tar.gz --prefix="floatnote-$VERSION/" -o "dist/floatnote-$VERSION.tar.gz" HEAD
+          cp "dist/floatnote-$VERSION.tar.gz" dist/floatnote.tar.gz   # stable name for .../releases/latest/download/
+          # Python wheel (for pipx / pip users, and inside the .deb)
+          python3 -m venv .build-venv
+          .build-venv/bin/pip install --quiet build
+          .build-venv/bin/python -m build --wheel --outdir dist
+          # Debian/Ubuntu package
+          packaging/build-deb.sh "$VERSION" "dist/floatnote-$VERSION-py3-none-any.whl" dist
+          cp "dist/floatnote_${VERSION}_all.deb" dist/floatnote.deb   # stable name for .../latest/download/
+          cd dist && sha256sum -- * > SHA256SUMS
+
+      - name: Release notes from CHANGELOG.md
+        run: |
+          # Everything under "## [VERSION]" up to the next "## [" heading.
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "No CHANGELOG.md section for $VERSION" >&2
+            exit 1
+          fi
+          DEB="floatnote_${VERSION}_all.deb"
+          BASE="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
+          cat >> notes.md <<EOF
+
+          ### Install (Ubuntu 24.04 or newer, GNOME)
+
+          \`\`\`bash
+          wget $BASE/$DEB
+          sudo apt install ./$DEB
+          \`\`\`
+
+          Then open **FloatNote** from your apps: a microphone appears in the top bar. Double-click it for a short guide.
+
+          Without apt: download \`floatnote-$VERSION.tar.gz\`, extract it and run \`./install.sh\`. See the README for details.
+          EOF
+          sed -i 's/^          //' notes.md
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "FloatNote $VERSION" \
+            --notes-file notes.md \
+            --verify-tag

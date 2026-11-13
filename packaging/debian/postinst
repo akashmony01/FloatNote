@@ -1,0 +1,23 @@
+#!/bin/sh
+set -e
+
+APP=/usr/lib/floatnote
+
+if [ "$1" = "configure" ]; then
+    echo "FloatNote: installing its Python libraries (about 250 MB to download)..."
+    rm -rf "$APP/venv"
+    # --system-site-packages: GTK comes from Ubuntu's python3-gi package.
+    python3 -m venv --system-site-packages "$APP/venv"
+    if ! "$APP/venv/bin/pip" install --quiet --disable-pip-version-check --no-input "$APP"/floatnote-*.whl; then
+        rm -rf "$APP/venv"
+        echo "FloatNote: couldn't download its Python libraries." >&2
+        echo "Check your internet connection, then run: sudo dpkg --configure -a" >&2
+        exit 1
+    fi
+    echo
+    echo "FloatNote is installed."
+    echo "Open FloatNote from your apps: a microphone appears in the top bar."
+    echo "Double-click it for a short guide. It also starts by itself when you log in."
+fi
+
+exit 0

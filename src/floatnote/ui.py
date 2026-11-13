@@ -1,0 +1,1448 @@
+"""GTK3 UI: a top-bar icon and a dropdown under it with Bugs, Ideas and Projects tabs.
+
+Everything here runs on the GTK main thread. Other threads reach the UI only
+through App.changed() / show_panel() / toggle_panel() / open_home() / quit(),
+which hop over to the main thread with GLib.idle_add.
+"""
+
+import json
+import os
+import threading
+from pathlib import Path
+import signal
+import time
+
+import gi
+
+gi.require_version("Gdk", "3.0")
+gi.require_version("Gtk", "3.0")
+
+# Run through XWayland so the dropdown can be placed exactly under the icon
+# and kept above other windows. PyGObject opens the display as soon as Gdk is
+# imported, so this must be an env var set before the import. Removed
+# afterwards so child processes (wl-copy, pw-play) don't inherit it.
+_saved_backend = os.environ.get("GDK_BACKEND")
+os.environ["GDK_BACKEND"] = "x11,*"
+from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
+
+if _saved_backend is None:
+    os.environ.pop("GDK_BACKEND", None)
+else:
+    os.environ["GDK_BACKEND"] = _saved_backend
+
+from . import paths  # noqa: E402
+from .words import suggest_fix  # noqa: E402
+
+COMPACT_SIZE = (340, 340)   # default dropdown
+LARGE_SIZE = (520, 600)     # after pressing the expand button
+FLASH_SECONDS = 6
+COPIED_GREEN_SECONDS = 2
+
+CSS = b"""
+.fn-dropdown { border: 1px solid alpha(@theme_fg_color, 0.18); border-radius: 10px;
+               background-color: @theme_bg_color; }
+.fn-tabs { margin: 6px 0 2px 6px; }
+.fn-tabs button { padding: 2px 8px; min-height: 24px; }
+.fn-status { font-size: smaller; opacity: 0.75; }
+.fn-num { opacity: 0.55; }
+.fn-date { opacity: 0.55; font-size: smaller; }
+.fn-row { padding: 4px 6px 4px 10px; }
+.fn-pending { opacity: 0.6; font-style: italic; }
+.fn-hint { opacity: 0.6; padding: 24px; }
+.fn-section { font-weight: bold; opacity: 0.8; margin: 10px 10px 2px 10px; }
+.fn-placeholder { opacity: 0.5; }
+.fn-chip { background-color: alpha(@theme_fg_color, 0.09); border-radius: 14px; padding: 0 2px 0 10px; }
+.fn-chip button { min-height: 22px; min-width: 22px; padding: 0; }
+.fn-chip-arrow { opacity: 0.55; }
+.fn-error { color: #ff6b6b; }
+.fn-preview { font-family: monospace; font-size: smaller; opacity: 0.8;
+              background-color: alpha(@theme_fg_color, 0.06); border-radius: 6px; padding: 6px 8px; }
+.fn-guide-title { font-size: larger; font-weight: bold; }
+.fn-key { font-weight: bold; }
+.fn-project { font-weight: bold; }
+.fn-menu-item { padding: 4px 10px; }
+.fn-subtabs button { padding: 1px 10px; min-height: 22px; font-size: smaller; }
+.fn-top-btn { padding: 3px; min-width: 22px; min-height: 22px; }
+"""
+
+
+def _idle(fn, *args):
+    """Run fn on the GTK main thread, once."""
+    def call():
+        fn(*args)
+        return GLib.SOURCE_REMOVE
+    GLib.idle_add(call)
+
+
+def _icon_button(icon: str, tooltip: str, callback) -> Gtk.Button:
+    b = Gtk.Button.new_from_icon_name(icon, Gtk.IconSize.BUTTON)
+    b.set_relief(Gtk.ReliefStyle.NONE)
+    b.set_tooltip_text(tooltip)
+    b.set_valign(Gtk.Align.START)
+    b.set_can_focus(False)
+    b.connect("clicked", lambda *_: callback())
+    return b
+
+
+def _hint(text: str) -> Gtk.Label:
+    label = Gtk.Label(label=text, justify=Gtk.Justification.CENTER, wrap=True, max_width_chars=1)
+    label.get_style_context().add_class("fn-hint")
+    label.show()
+    return label
+
+
+def _scrolled(child: Gtk.Widget) -> Gtk.ScrolledWindow:
+    sw = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
+    sw.add(child)
+    return sw
+
+
+def _clear(listbox: Gtk.ListBox) -> None:
+    for child in listbox.get_children():
+        listbox.remove(child)
+
+
+class NoteRow(Gtk.ListBoxRow):
+    """One note: a leading widget (number or checkbox), text, and action buttons.
+
+    Double-click the text or press the pencil to edit in a wrapping text box.
+    Enter saves, Shift+Enter adds a line break, Esc cancels.
+    """
+
+    def __init__(self, note, lead: Gtk.Widget, *, on_save, on_delete, on_edit_state,
+                 extra_buttons=(), subtitle: str | None = None):
+        super().__init__(activatable=False, selectable=False)
+        self.note = note
+        self._on_save = on_save
+        self._on_edit_state = on_edit_state
+
+        box = Gtk.Box(spacing=6)
+        box.get_style_context().add_class("fn-row")
+        lead.set_valign(Gtk.Align.START)
+        box.pack_start(lead, False, False, 0)
+
+        self.label = Gtk.Label(label=note.text, xalign=0, wrap=True, hexpand=True,
+                               wrap_mode=Pango.WrapMode.WORD_CHAR, max_width_chars=1)
+        if note.done:
+            self.label.set_markup(f"<s>{GLib.markup_escape_text(note.text)}</s>")
+        view = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        view.pack_start(self.label, False, False, 0)
+        if subtitle:
+            sub = Gtk.Label(label=subtitle, xalign=0)
+            sub.get_style_context().add_class("fn-date")
+            view.pack_start(sub, False, False, 0)
+        clicks = Gtk.EventBox()
+        clicks.add(view)
+        clicks.connect("button-press-event", self._on_click)
+
+        # Multi-line editor: wraps like the label, grows with the text.
+        self.editor = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR, hexpand=True,
+                                   left_margin=6, right_margin=6, top_margin=4, bottom_margin=4)
+        self.editor.connect("key-press-event", self._on_key)
+        frame = Gtk.Frame()
+        frame.add(self.editor)
+
+        self.stack = Gtk.Stack(hexpand=True, vhomogeneous=False, interpolate_size=True)
+        self.stack.add_named(clicks, "view")
+        self.stack.add_named(frame, "edit")
+        box.pack_start(self.stack, True, True, 0)
+
+        self.edit_btn = _icon_button("document-edit-symbolic", "Edit", self.toggle_edit)
+        box.pack_start(self.edit_btn, False, False, 0)
+        for b in extra_buttons:
+            box.pack_start(b, False, False, 0)
+        box.pack_start(_icon_button("user-trash-symbolic", "Delete", lambda: on_delete(note)),
+                       False, False, 0)
+        self.add(box)
+
+    @property
+    def editing(self) -> bool:
+        return self.stack.get_visible_child_name() == "edit"
+
+    def _on_click(self, _widget, event):
+        if event.type == Gdk.EventType._2BUTTON_PRESS:
+            self.start_edit()
+        return False
+
+    def _on_key(self, _widget, event):
+        if event.keyval == Gdk.KEY_Escape:
+            self.finish_edit(save=False)
+            return True
+        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and not event.state & Gdk.ModifierType.SHIFT_MASK:
+            self.finish_edit(save=True)
+            return True
+        return False
+
+    def toggle_edit(self):
+        if self.editing:
+            self.finish_edit(save=True)
+        else:
+            self.start_edit()
+
+    def start_edit(self):
+        buf = self.editor.get_buffer()
+        buf.set_text(self.note.text)
+        self.stack.set_visible_child_name("edit")
+        self.edit_btn.set_image(Gtk.Image.new_from_icon_name("object-select-symbolic", Gtk.IconSize.BUTTON))
+        self.edit_btn.set_tooltip_text("Save (Enter)")
+        self._on_edit_state(self, True)
+        self.editor.grab_focus()
+        buf.place_cursor(buf.get_end_iter())
+
+    def finish_edit(self, save: bool):
+        if not self.editing:
+            return
+        buf = self.editor.get_buffer()
+        text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).strip()
+        self.stack.set_visible_child_name("view")
+        self.edit_btn.set_image(Gtk.Image.new_from_icon_name("document-edit-symbolic", Gtk.IconSize.BUTTON))
+        self.edit_btn.set_tooltip_text("Edit")
+        changed = save and text and text != self.note.text
+        if changed:
+            self.label.set_text(text)
+        self._on_edit_state(self, False)
+        if changed:
+            self._on_save(self.note, text)
+
+
+class MultiEntry(Gtk.Overlay):
+    """Multi-line text box with a placeholder. Enter submits, Shift+Enter adds a line."""
+
+    def __init__(self, placeholder: str, on_submit):
+        super().__init__(margin=6)
+        self._on_submit = on_submit
+        self.view = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR, accepts_tab=False,
+                                 left_margin=6, right_margin=6, top_margin=5, bottom_margin=5)
+        self.view.set_size_request(-1, 44)
+        self.view.connect("key-press-event", self._on_key)
+        frame = Gtk.Frame()
+        frame.add(self.view)
+        self.add(frame)
+        self.placeholder = Gtk.Label(label=placeholder, xalign=0, yalign=0, wrap=True, max_width_chars=1,
+                                     hexpand=True, margin_start=8, margin_top=5, margin_end=8)
+        self.placeholder.get_style_context().add_class("fn-placeholder")
+        self.add_overlay(self.placeholder)
+        self.set_overlay_pass_through(self.placeholder, True)
+        self.view.get_buffer().connect("changed", lambda *_: self._sync_placeholder())
+
+    def _sync_placeholder(self):
+        self.placeholder.set_visible(self.view.get_buffer().get_char_count() == 0)
+
+    def _on_key(self, _widget, event):
+        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and not event.state & Gdk.ModifierType.SHIFT_MASK:
+            buf = self.view.get_buffer()
+            text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).strip()
+            if text:
+                self._on_submit(text)
+                buf.set_text("")
+            return True
+        return False
+
+
+def _pending_row() -> Gtk.Widget:
+    row = Gtk.Box(spacing=8, margin=8)
+    spinner = Gtk.Spinner()
+    spinner.start()
+    label = Gtk.Label(label="Transcribing…", xalign=0)
+    label.get_style_context().add_class("fn-pending")
+    row.pack_start(spinner, False, False, 0)
+    row.pack_start(label, True, True, 0)
+    return row
+
+
+def _chip(parts: list[str], on_delete) -> Gtk.Widget:
+    """A rounded tag: 'whitetail → Wagtail ✕' (parts joined with an arrow)."""
+    box = Gtk.Box(spacing=4, halign=Gtk.Align.START)
+    box.get_style_context().add_class("fn-chip")
+    for i, part in enumerate(parts):
+        if i:
+            arrow = Gtk.Label(label="→")
+            arrow.get_style_context().add_class("fn-chip-arrow")
+            box.pack_start(arrow, False, False, 0)
+        box.pack_start(Gtk.Label(label=part), False, False, 0)
+    remove = _icon_button("window-close-symbolic", "Remove", on_delete)
+    remove.set_valign(Gtk.Align.CENTER)
+    box.pack_start(remove, False, False, 0)
+    return box
+
+
+def _chips_box() -> Gtk.FlowBox:
+    return Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=False, margin=6,
+                       row_spacing=6, column_spacing=6, max_children_per_line=30,
+                       valign=Gtk.Align.START)
+
+
+def _word_row(text: str, on_delete) -> Gtk.ListBoxRow:
+    row = Gtk.ListBoxRow(activatable=False, selectable=False)
+    box = Gtk.Box(spacing=6)
+    box.get_style_context().add_class("fn-row")
+    box.pack_start(Gtk.Label(label=text, xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END),
+                   True, True, 0)
+    box.pack_start(_icon_button("user-trash-symbolic", "Remove", on_delete), False, False, 0)
+    row.add(box)
+    return row
+
+
+class Dropdown(Gtk.Window):
+    """Borderless panel that drops down from the top-bar icon.
+
+    Opens on a click on the icon, Ctrl+Super+Alt+N, or at login. Closes when
+    you click anywhere else, press Esc, or click the icon again.
+    """
+
+    def __init__(self, app):
+        super().__init__(title="FloatNote")
+        self.app = app
+        self._editing: NoteRow | None = None
+        self._dirty = False
+        self._flash = ""
+        self._flash_until = 0.0
+        self._tick_id = 0
+        self._hidden_at = 0.0
+        self._dialog_open = False
+        self._suggestion: tuple[str, str] | None = None
+        self._had_focus = False       # only close on focus loss after we really had it
+        self._closed_by_focus_at = 0.0
+        self._capturing: str | None = None  # shortcut waiting for new keys
+
+        self.set_decorated(False)
+        self._expanded = bool(app.settings.get("expanded"))
+        self.set_default_size(*self._size())
+        self.set_keep_above(True)
+        self.set_skip_taskbar_hint(True)
+        self.set_skip_pager_hint(True)
+        self.set_icon_name("audio-input-microphone")
+        self.connect("delete-event", lambda *_: self.close_dropdown() or True)
+        self.connect("focus-out-event", self._on_focus_out)
+        self.connect("focus-in-event", self._on_focus_in)
+        # GNOME keeps the left edge when a window shrinks; re-snap to the right.
+        self.connect("configure-event", lambda *_: _idle(self._snap_right) or False)
+        self.connect("key-press-event", self._on_key)
+
+        # Rounded corners need an RGBA visual (fine on GNOME; falls back to square).
+        visual = self.get_screen().get_rgba_visual()
+        if visual is not None:
+            self.set_visual(visual)
+            self.set_app_paintable(True)
+
+        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
+        self.stack.add_titled(self._build_bugs_page(), "bugs", "Bugs")
+        self.stack.add_titled(self._build_ideas_page(), "ideas", "Ideas")
+        self.stack.add_titled(self._build_projects_page(), "projects", "Projects")
+        self.stack.add_named(self._build_settings_page(), "settings")
+        self.stack.add_named(self._build_guide_page(), "guide")
+        self.stack.connect("notify::visible-child-name", lambda *_: self._on_tab_changed())
+
+        # Linked buttons instead of Gtk.StackSwitcher: each tab only as wide as
+        # its label, so the compact dropdown stays narrow.
+        tabs = Gtk.Box(halign=Gtk.Align.START, hexpand=True)
+        tabs.get_style_context().add_class("linked")
+        tabs.get_style_context().add_class("fn-tabs")
+        self._tab_buttons: dict[str, Gtk.RadioButton] = {}
+        group = None
+        for name in ("bugs", "ideas", "projects"):
+            b = Gtk.RadioButton(group=group, label=name.capitalize(), draw_indicator=False)
+            b.set_can_focus(False)
+            b.connect("toggled", lambda btn, n=name: btn.get_active() and self.stack.set_visible_child_name(n))
+            group = group or b
+            self._tab_buttons[name] = b
+            tabs.pack_start(b, False, False, 0)
+        self.expand_btn = _icon_button("view-fullscreen-symbolic", "Make bigger", self._toggle_size)
+        self.expand_btn.set_valign(Gtk.Align.CENTER)
+        self._no_tab = Gtk.RadioButton(group=group)  # active while Settings/Guide is shown
+        self.help_btn = _icon_button("help-about-symbolic", "How FloatNote works", lambda: self._show_page("guide"))
+        self.settings_btn = _icon_button("emblem-system-symbolic", "Settings", lambda: self._show_page("settings"))
+        for b in (self.help_btn, self.settings_btn, self.expand_btn):
+            b.set_valign(Gtk.Align.CENTER)
+            b.get_style_context().add_class("fn-top-btn")
+        top = Gtk.Box()
+        top.pack_start(tabs, True, True, 0)
+        top.pack_end(self.expand_btn, False, False, 4)
+        top.pack_end(self.settings_btn, False, False, 0)
+        top.pack_end(self.help_btn, False, False, 0)
+        self.status = Gtk.Label(xalign=1, margin_end=10, ellipsize=Pango.EllipsizeMode.END,
+                                max_width_chars=1, hexpand=True)
+        self.status.get_style_context().add_class("fn-status")
+        # Project selector: "General · 2 ▾" opens a list of projects.
+        self.project_btn = Gtk.MenuButton(relief=Gtk.ReliefStyle.NONE, margin_start=4)
+        self.project_btn.set_tooltip_text("Active project: new bugs go here")
+        self.project_label = Gtk.Label(ellipsize=Pango.EllipsizeMode.END, max_width_chars=24)
+        self.project_label.get_style_context().add_class("fn-project")
+        btn_box = Gtk.Box(spacing=4)
+        btn_box.pack_start(self.project_label, False, False, 0)
+        btn_box.pack_start(Gtk.Image.new_from_icon_name("pan-down-symbolic", Gtk.IconSize.BUTTON), False, False, 0)
+        self.project_btn.add(btn_box)
+        self.project_popover = Gtk.Popover()
+        self.project_popover.connect("show", lambda *_: self._fill_project_menu())
+        self.project_btn.set_popover(self.project_popover)
+        status_row = Gtk.Box(spacing=4, margin_bottom=2)
+        status_row.pack_start(self.project_btn, False, False, 0)
+        status_row.pack_start(self.status, True, True, 0)
+
+        # "Always fix X -> Y?" offer after editing a note.
+        self.suggest_bar = Gtk.InfoBar(message_type=Gtk.MessageType.QUESTION, show_close_button=False)
+        self.suggest_label = Gtk.Label(xalign=0, wrap=True, hexpand=True, max_width_chars=1,
+                                       wrap_mode=Pango.WrapMode.WORD_CHAR)
+        self.suggest_bar.get_content_area().add(self.suggest_label)
+        self.suggest_bar.add_button("Always fix", 1)
+        self.suggest_bar.add_button("No", 0)
+        self.suggest_bar.connect("response", self._on_suggest_response)
+
+        frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        frame.get_style_context().add_class("fn-dropdown")
+        frame.pack_start(top, False, False, 0)
+        frame.pack_start(status_row, False, False, 0)
+        frame.pack_start(Gtk.Separator(), False, False, 0)
+        frame.pack_start(self.suggest_bar, False, False, 0)
+        frame.pack_start(self._build_permission_bar(), False, False, 0)
+        frame.pack_start(self.stack, True, True, 0)
+        self.add(frame)
+        frame.show_all()
+        self.suggest_bar.hide()  # shown when there's a fix to offer
+        self.perm_bar.hide()     # shown when hold-to-record lacks permission
+        self._sync_expand_button()
+
+    # ---- pages ------------------------------------------------------------
+
+    def _build_bugs_page(self) -> Gtk.Widget:
+        self.bug_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        self.bug_list.set_placeholder(_hint("No bugs yet.\nHold Ctrl+Super and describe the issue,\nlet go when you're done."))
+        self.new_bug = MultiEntry("Type a bug and press Enter (Shift+Enter for a new line)", self._add_bug)
+        self.bug_scroller = _scrolled(self.bug_list)
+
+        self.copy_btn = Gtk.Button(label="Copy all")
+        self.copy_btn.get_style_context().add_class("suggested-action")
+        self.copy_btn.set_tooltip_text("Copy all bugs, then clear the list (press Ctrl+Super+Alt and let go)")
+        # Off the GTK thread: a hanging clipboard tool must not freeze the window.
+        self.copy_btn.connect("clicked", lambda *_: threading.Thread(
+            target=self.app.daemon.handle, args=({"cmd": "copy-all"},), daemon=True).start())
+        footer = Gtk.Box(spacing=4, margin=6)
+        footer.pack_start(_icon_button("edit-undo-symbolic", "Undo last copy/clear",
+                                       lambda: self.app.daemon.handle({"cmd": "undo"})), False, False, 0)
+        footer.pack_start(_icon_button("edit-clear-all-symbolic", "Clear list without copying",
+                                       lambda: self.app.daemon.handle({"cmd": "clear"})), False, False, 0)
+        footer.pack_end(self.copy_btn, False, False, 0)
+
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        page.pack_start(self.new_bug, False, False, 0)
+        page.pack_start(Gtk.Separator(), False, False, 0)
+        page.pack_start(self.bug_scroller, True, True, 0)
+        page.pack_start(Gtk.Separator(), False, False, 0)
+        page.pack_start(footer, False, False, 0)
+        return page
+
+    def _build_ideas_page(self) -> Gtk.Widget:
+        self.new_idea = MultiEntry("Type an idea and press Enter (Shift+Enter for a new line)", self._add_idea)
+
+        self.idea_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        self.idea_list.set_placeholder(_hint("No open ideas.\nHold Super+Alt and say what you want to build."))
+
+        self.show_done = Gtk.CheckButton(label="Show done")
+        self.show_done.connect("toggled", lambda *_: self.refresh())
+        footer = Gtk.Box(spacing=4, margin=6)
+        footer.pack_start(self.show_done, False, False, 0)
+
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        page.pack_start(self.new_idea, False, False, 0)
+        page.pack_start(Gtk.Separator(), False, False, 0)
+        page.pack_start(_scrolled(self.idea_list), True, True, 0)
+        page.pack_start(Gtk.Separator(), False, False, 0)
+        page.pack_start(footer, False, False, 0)
+        return page
+
+    def _build_words_page(self) -> Gtk.Widget:
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+
+        def section(title, explain):
+            label = Gtk.Label(label=title, xalign=0)
+            label.get_style_context().add_class("fn-section")
+            page.pack_start(label, False, False, 0)
+            sub = Gtk.Label(label=explain, xalign=0, wrap=True, max_width_chars=1,
+                            margin_start=10, margin_end=10)
+            sub.get_style_context().add_class("fn-date")
+            page.pack_start(sub, False, False, 0)
+
+        section("Fix misheard words", "e.g. whitetail → Wagtail: whenever it hears the left word, it writes the right one.")
+        self.fix_heard = Gtk.Entry(placeholder_text="it writes", hexpand=True, width_chars=5)
+        self.fix_right = Gtk.Entry(placeholder_text="you said", hexpand=True, width_chars=5)
+        add_fix = Gtk.Button(label="Add")
+        add_fix.connect("clicked", lambda *_: self._add_fix())
+        self.fix_right.connect("activate", lambda *_: self._add_fix())
+        form = Gtk.Box(spacing=4, margin=6)
+        form.pack_start(self.fix_heard, True, True, 0)
+        form.pack_start(Gtk.Label(label="→"), False, False, 0)
+        form.pack_start(self.fix_right, True, True, 0)
+        form.pack_start(add_fix, False, False, 0)
+        page.pack_start(form, False, False, 0)
+        self.fix_list = _chips_box()
+        self.fix_empty = _hint("No fixes yet. Tip: edit a note and FloatNote offers one.")
+        page.pack_start(self.fix_list, False, False, 0)
+        page.pack_start(self.fix_empty, False, False, 0)
+
+        section("Hint words", "Names and tech terms, so they get spelled right in the first place.")
+        self.hint_entry = Gtk.Entry(placeholder_text="Add a word and press Enter", margin=6)
+        self.hint_entry.connect("activate", lambda *_: self._add_hint())
+        page.pack_start(self.hint_entry, False, False, 0)
+        self.hint_list = _chips_box()
+        page.pack_start(self.hint_list, False, False, 0)
+        return page  # placed inside Settings → Words, which scrolls
+
+    # ---- settings page ------------------------------------------------------
+
+    KEY_ROWS = [("bug", "Record a bug", "hold"), ("idea", "Record an idea", "hold"),
+                ("copy", "Copy all bugs", "press, let go"), ("toggle", "Open / close", "press"),
+                ("next", "Next project", "press")]
+
+    SETTINGS_TABS = [("keys", "Keys", "Click Change, hold the new keys together, let go."),
+                     ("copy", "Copy", "The first line of what Copy all puts on the clipboard."),
+                     ("speech", "Speech", "Which speech model turns your voice into text."),
+                     ("words", "Words", ""),
+                     ("general", "General", "")]
+
+    def _build_settings_page(self) -> Gtk.Widget:
+        # Sub-tabs inside Settings: Keys | Copy | Speech | General
+        self.settings_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
+        bar = Gtk.Box(halign=Gtk.Align.START, margin_start=10, margin_top=6, margin_bottom=2)
+        bar.get_style_context().add_class("linked")
+        bar.get_style_context().add_class("fn-subtabs")
+        pages, group = {}, None
+        self.settings_tab_buttons: dict[str, Gtk.RadioButton] = {}
+        for name, title, explain in self.SETTINGS_TABS:
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            if explain:
+                intro = Gtk.Label(label=explain, xalign=0, wrap=True, max_width_chars=1,
+                                  margin_start=10, margin_end=10, margin_top=8, margin_bottom=4)
+                intro.get_style_context().add_class("fn-date")
+                box.pack_start(intro, False, False, 0)
+            self.settings_stack.add_named(_scrolled(box), name)
+            pages[name] = box
+            b = Gtk.RadioButton(group=group, label=title, draw_indicator=False)
+            b.set_can_focus(False)
+            b.connect("toggled", lambda btn, n=name: btn.get_active()
+                      and self.settings_stack.set_visible_child_name(n))
+            group = group or b
+            self.settings_tab_buttons[name] = b
+            bar.pack_start(b, False, False, 0)
+
+        pages["words"].pack_start(self._build_words_page(), False, False, 0)
+        page = pages["keys"]
+        self._key_values: dict[str, Gtk.Label] = {}
+        self._key_buttons: dict[str, Gtk.Button] = {}
+        for which, title, how in self.KEY_ROWS:
+            # Two lines per shortcut so it fits the compact dropdown:
+            #   Record a bug (hold)          [Change]
+            #   Ctrl+Super
+            name = Gtk.Label(xalign=0, hexpand=True)
+            name.set_markup(f"{title} <span alpha='60%'>({how})</span>")
+            value = Gtk.Label(xalign=0)
+            value.get_style_context().add_class("fn-key")
+            texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            texts.pack_start(name, False, False, 0)
+            texts.pack_start(value, False, False, 0)
+            button = Gtk.Button(label="Change", valign=Gtk.Align.CENTER)
+            button.connect("clicked", lambda _b, w=which: self._on_change_clicked(w))
+            row = Gtk.Box(spacing=8, margin_start=10, margin_end=8, margin_top=3)
+            row.pack_start(texts, True, True, 0)
+            row.pack_end(button, False, False, 0)
+            page.pack_start(row, False, False, 0)
+            self._key_values[which] = value
+            self._key_buttons[which] = button
+        self.key_error = Gtk.Label(xalign=0, wrap=True, max_width_chars=1, margin_start=10, margin_end=10)
+        self.key_error.get_style_context().add_class("fn-error")
+        page.pack_start(self.key_error, False, False, 0)
+
+        page = pages["copy"]
+        # Multi-line, wrapping box (the heading can be a sentence or two).
+        self.heading_view = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR, accepts_tab=False,
+                                         left_margin=6, right_margin=6, top_margin=5, bottom_margin=5)
+        self.heading_view.set_size_request(-1, 48)
+        self.heading_view.get_buffer().connect("changed", lambda *_: self._heading_changed())
+        heading_frame = Gtk.Frame(margin_start=8, margin_end=8)
+        heading_frame.add(self.heading_view)
+        page.pack_start(heading_frame, False, False, 0)
+        hint = Gtk.Label(label="Leave empty to copy just the numbered list.", xalign=0,
+                         margin_start=10, wrap=True, max_width_chars=1)
+        hint.get_style_context().add_class("fn-date")
+        page.pack_start(hint, False, False, 0)
+        self.heading_preview = Gtk.Label(xalign=0, yalign=0, wrap=True, max_width_chars=1, margin=8, selectable=False)
+        self.heading_preview.get_style_context().add_class("fn-preview")
+        page.pack_start(self.heading_preview, False, False, 0)
+        self._heading_timer = 0
+
+        page = pages["speech"]
+        self._model_buttons: dict[str, Gtk.RadioButton] = {}
+        group = None  # model radio group
+        for name, about in (("small.en", "accurate, ~1.5 s per 10 s of speech"),
+                            ("base.en", "fastest, more misheard words")):
+            b = Gtk.RadioButton(group=group, label=f"{name}: {about}", margin_start=8, margin_top=4)
+            b.get_child().set_line_wrap(True)
+            b.get_child().set_max_width_chars(1)
+            b.connect("toggled", lambda btn, n=name: btn.get_active() and not self._loading_settings
+                      and self.app.daemon.set_model(n))
+            group = group or b
+            self._model_buttons[name] = b
+            page.pack_start(b, False, False, 0)
+
+        page = pages["general"]
+        self.sounds_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
+        self.sounds_switch.connect("notify::active", lambda sw, _p: not self._loading_settings
+                                   and self.app.daemon.set_option("sounds", sw.get_active()))
+        self.bar_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
+        self.bar_switch.connect("notify::active", lambda sw, _p: not self._loading_settings
+                                and self._set_bar_label(sw.get_active()))
+        self.login_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
+        self.login_switch.connect("notify::active", lambda sw, _p: not self._loading_settings
+                                  and self.app.daemon.set_option("home_on_login", sw.get_active()))
+        for label, switch in (("Project name in top bar", self.bar_switch),
+                              ("Start / stop sounds", self.sounds_switch),
+                              ("Show ideas at login", self.login_switch)):
+            row = Gtk.Box(spacing=8, margin_start=10, margin_end=10, margin_top=8)
+            row.pack_start(Gtk.Label(label=label, xalign=0, wrap=True, max_width_chars=1), True, True, 0)
+            row.pack_end(switch, False, False, 0)
+            page.pack_start(row, False, False, 0)
+
+        guide = Gtk.Button(label="Show the guide", margin=10, halign=Gtk.Align.START)
+        guide.connect("clicked", lambda *_: self._show_page("guide"))
+        page.pack_start(guide, False, False, 0)
+        self._loading_settings = False
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        outer.pack_start(bar, False, False, 0)
+        outer.pack_start(self.settings_stack, True, True, 0)
+        return outer
+
+    def _load_settings_page(self):
+        cfg = self.app.daemon.cfg
+        self._loading_settings = True
+        try:
+            self._show_keys()
+            self.key_error.set_text("")
+            self.heading_view.get_buffer().set_text(cfg.copy_intro)
+            self._update_heading_preview()
+            if cfg.model in self._model_buttons:
+                self._model_buttons[cfg.model].set_active(True)
+            self.sounds_switch.set_active(cfg.sounds)
+            self.bar_switch.set_active(cfg.show_project_in_bar)
+            self.login_switch.set_active(cfg.home_on_login)
+        finally:
+            self._loading_settings = False
+
+    def _show_keys(self):
+        from .hotkeys import pretty_combo
+
+        cfg = self.app.daemon.cfg
+        values = {"bug": cfg.hold_bug, "idea": cfg.hold_idea, "copy": cfg.copy_keys, "toggle": cfg.toggle_keys,
+                  "next": cfg.next_project_keys}
+        for which, label in self._key_values.items():
+            label.set_text(pretty_combo(values[which]))
+        for b in self._key_buttons.values():
+            b.set_label("Change")
+            b.set_sensitive(True)
+
+    def _on_change_clicked(self, which: str):
+        if self._capturing == which:
+            self._cancel_capture()  # the button reads "Cancel" while capturing
+        else:
+            self._start_capture(which)
+
+    def _start_capture(self, which: str):
+        self._capturing = which
+        for w, b in self._key_buttons.items():
+            b.set_sensitive(w == which)
+        self._key_buttons[which].set_label("Cancel")
+        self._key_values[which].set_text("Press the new keys…")
+        self._key_message("Hold the new keys together, then let go. Esc or Cancel keeps the old ones.")
+        self.app.daemon.capture_keys(lambda names, err: _idle(self._captured, which, names, err))
+
+    def _cancel_capture(self):
+        self.app.daemon.cancel_capture()
+        self._capturing = None
+        self._show_keys()
+        self._key_message("Kept the old shortcut.")
+
+    def _captured(self, which, names, error):
+        from .hotkeys import format_combo, pretty_combo
+
+        if self._capturing != which:
+            return  # already cancelled from the button
+        self._capturing = None
+        if names is None and error is None:  # cancelled with Esc
+            self._show_keys()
+            self._key_message("Kept the old shortcut.")
+            return
+        if error is None:
+            combo = format_combo(names)
+            error = self.app.daemon.set_keys(which, combo)
+            if error is None:
+                self.flash(f"Shortcut saved: {pretty_combo(combo)}")
+        self._show_keys()
+        self._key_message(error or "", error=True)
+        self.refresh()
+
+    def _key_message(self, text: str, error: bool = False):
+        ctx = self.key_error.get_style_context()
+        (ctx.add_class if error else ctx.remove_class)("fn-error")
+        if not error:
+            ctx.add_class("fn-date")
+        else:
+            ctx.remove_class("fn-date")
+        self.key_error.set_text(text)
+
+    def _set_bar_label(self, on: bool):
+        self.app.daemon.set_option("show_project_in_bar", on)
+        self.app._update_indicators()
+
+    def _heading_changed(self):
+        self._update_heading_preview()
+        if self._loading_settings:
+            return
+        if self._heading_timer:
+            GLib.source_remove(self._heading_timer)
+        self._heading_timer = GLib.timeout_add(600, self._save_heading)
+
+    def _save_heading(self):
+        self._heading_timer = 0
+        self.app.daemon.set_option("copy_intro", self._heading_text())
+        return GLib.SOURCE_REMOVE
+
+    def _update_heading_preview(self):
+        from .store import Note, format_paste
+
+        sample = [Note(0, "bug", t, "", None, False, None, None, None)
+                  for t in ("The navbar overlaps the logo on mobile.", "Submit does nothing.")]
+        self.heading_preview.set_text(format_paste(self._heading_text(), sample).rstrip())
+
+    def _heading_text(self) -> str:
+        buf = self.heading_view.get_buffer()
+        return buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).strip()
+
+    # ---- guide --------------------------------------------------------------
+
+    def _build_guide_page(self) -> Gtk.Widget:
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, margin=12, spacing=8)
+        self.guide_counter = Gtk.Label(xalign=0)
+        self.guide_counter.get_style_context().add_class("fn-date")
+        self.guide_title = Gtk.Label(xalign=0, wrap=True, max_width_chars=1)
+        self.guide_title.get_style_context().add_class("fn-guide-title")
+        self.guide_body = Gtk.Label(xalign=0, yalign=0, wrap=True, max_width_chars=1, vexpand=True)
+        self.guide_back = Gtk.Button(label="Back")
+        self.guide_back.connect("clicked", lambda *_: self._guide_step(self._guide_index - 1))
+        self.guide_next = Gtk.Button(label="Next")
+        self.guide_next.get_style_context().add_class("suggested-action")
+        self.guide_next.connect("clicked", lambda *_: self._guide_next())
+        skip = Gtk.Button(label="Skip")
+        skip.set_relief(Gtk.ReliefStyle.NONE)
+        skip.connect("clicked", lambda *_: self._guide_done())
+        buttons = Gtk.Box(spacing=6)
+        buttons.pack_start(skip, False, False, 0)
+        buttons.pack_end(self.guide_next, False, False, 0)
+        buttons.pack_end(self.guide_back, False, False, 0)
+        page.pack_start(self.guide_counter, False, False, 0)
+        page.pack_start(self.guide_title, False, False, 0)
+        page.pack_start(self.guide_body, True, True, 0)
+        page.pack_start(buttons, False, False, 0)
+        self._guide_index = 0
+        return _scrolled(page)
+
+    def _guide_steps(self) -> list[tuple[str, str]]:
+        from .hotkeys import pretty_combo
+
+        cfg = self.app.daemon.cfg
+
+        def key(text):
+            return f"<b>{GLib.markup_escape_text(pretty_combo(text))}</b>"
+
+        return [
+            ("Record a bug by voice",
+             f"Hold {key(cfg.hold_bug)}, describe what's wrong, then let go.\n\n"
+             "The mic icon in the top bar turns <b>red</b> while recording and <b>yellow</b> while "
+             "it writes the text. The note lands in the <b>Bugs</b> tab."),
+            ("Save an idea",
+             f"Hold {key(cfg.hold_idea)} and say the idea. The icon turns <b>blue</b>.\n\n"
+             "Ideas stay in the <b>Ideas</b> tab until you tick them done, and show up when you log in."),
+            ("Copy the bugs for Claude",
+             f"Press {key(cfg.copy_keys)} together and let go. All bugs are copied as a numbered "
+             "list and the icon flashes <b>green</b>. Paste them anywhere, e.g. into Claude Code.\n\n"
+             "The list then starts fresh; the ↶ button brings the last batch back."),
+            ("Projects",
+             "Testing more than one app? Make a project for each in the <b>Projects</b> tab. "
+             "New bugs go to the active project (shown at the top; click it to switch), "
+             f"or press {key(cfg.next_project_keys)} to jump to the next one.\n\n"
+             "Copy all only copies the active project's bugs. Link a code folder and Claude Code "
+             "can read that project's bugs with <tt>floatnote list --take</tt> from that folder."),
+            ("Fix words and find your way around",
+             "Misheard a name? Edit the note and FloatNote offers to always fix that word. "
+             "All fixes and hint words live in <b>⚙ Settings → Words</b>.\n\n"
+             f"Open this dropdown by double-clicking the mic icon or with {key(cfg.toggle_keys)}. "
+             "Shortcuts, the copy heading and the speech model are in ⚙ Settings too."),
+        ]
+
+    def _guide_step(self, index: int):
+        steps = self._guide_steps()
+        self._guide_index = max(0, min(index, len(steps) - 1))
+        title, body = steps[self._guide_index]
+        self.guide_counter.set_text(f"Step {self._guide_index + 1} of {len(steps)}")
+        self.guide_title.set_text(title)
+        self.guide_body.set_markup(body)
+        self.guide_back.set_sensitive(self._guide_index > 0)
+        last = self._guide_index == len(steps) - 1
+        self.guide_next.set_label("Done" if last else "Next")
+
+    def _guide_next(self):
+        if self._guide_index >= len(self._guide_steps()) - 1:
+            self._guide_done()
+        else:
+            self._guide_step(self._guide_index + 1)
+
+    def _guide_done(self):
+        self.app.settings["guide_seen"] = True
+        self.app.save_settings()
+        self._tab_buttons["bugs"].set_active(True)
+
+    # ---- open / close -----------------------------------------------------
+
+    def _on_tab_changed(self):
+        name = self.stack.get_visible_child_name()
+        if self._capturing is not None and name != "settings":
+            self._cancel_capture()
+        if name in self._tab_buttons and not self._tab_buttons[name].get_active():
+            self._tab_buttons[name].set_active(True)  # tab chosen by code (e.g. at login)
+        self.refresh()
+
+    def _show_page(self, name: str):
+        """Show Settings or the Guide; pressing the same button again goes back to Bugs."""
+        if self.stack.get_visible_child_name() == name:
+            self._tab_buttons["bugs"].set_active(True)
+            return
+        if name == "settings":
+            self._load_settings_page()
+        else:
+            self._guide_step(0)
+        self._no_tab.set_active(True)
+        self.stack.set_visible_child_name(name)
+
+    def _size(self) -> tuple[int, int]:
+        return LARGE_SIZE if self._expanded else COMPACT_SIZE
+
+    def _toggle_size(self):
+        self._expanded = not self._expanded
+        self.app.settings["expanded"] = self._expanded
+        self.app.save_settings()
+        self._sync_expand_button()
+        self.resize(*self._size())
+        self._place(None)
+
+    def _sync_expand_button(self):
+        icon = "view-restore-symbolic" if self._expanded else "view-fullscreen-symbolic"
+        self.expand_btn.set_image(Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.BUTTON))
+        self.expand_btn.set_tooltip_text("Make smaller" if self._expanded else "Make bigger")
+
+    def open_dropdown(self, x: int | None = None, tab: str | None = None):
+        if not self.app.settings.get("guide_seen"):
+            tab = "guide"  # first time: explain how FloatNote works
+        if tab in ("settings", "guide"):
+            if self.stack.get_visible_child_name() != tab:
+                self._show_page(tab)
+        elif tab:
+            self.stack.set_visible_child_name(tab)
+        self._had_focus = False
+        self.resize(*self._size())
+        self._place(x)
+        self.show()
+        self.refresh()
+        self._focus()
+
+    def close_dropdown(self):
+        if not self.get_visible():
+            return
+        if self._capturing is not None:
+            self._cancel_capture()  # don't keep swallowing keys after the window is gone
+        if self._editing is not None:
+            self._editing.finish_edit(save=True)
+        self._hidden_at = time.monotonic()
+        self.hide()
+
+    def toggle(self, x: int | None = None):
+        # A click on the icon first takes focus away (which closes us), then
+        # arrives as a toggle: don't reopen straight away in that case.
+        if self.get_visible() or time.monotonic() - self._closed_by_focus_at < 0.5:
+            self.close_dropdown()
+        else:
+            self.open_dropdown(x)
+
+    @staticmethod
+    def _workarea():
+        display = Gdk.Display.get_default()
+        monitor = display.get_primary_monitor() or display.get_monitor(0)
+        return monitor.get_workarea()  # starts just below the top bar
+
+    def _place(self, x: int | None):
+        # Always flush with the top-right corner, right under the top bar.
+        area = self._workarea()
+        w, _h = self._size()
+        self.move(area.x + area.width - w, area.y)
+
+    def _snap_right(self):
+        """After a resize lands, make sure the right edge still touches the corner."""
+        if not self.get_visible():
+            return
+        area = self._workarea()
+        x, y = self.get_position()
+        w, _h = self.get_size()
+        target = area.x + area.width - w
+        if abs(x - target) > 1 or y != area.y:
+            self.move(target, area.y)
+
+    def _focus(self):
+        # Take focus so clicking elsewhere closes the dropdown. Use the X server
+        # time so GNOME treats it as a response to the user's action.
+        try:
+            gi.require_version("GdkX11", "3.0")
+            from gi.repository import GdkX11
+
+            self.present_with_time(GdkX11.x11_get_server_time(self.get_window()))
+        except (ImportError, ValueError, TypeError):
+            self.present()
+
+    def _on_focus_in(self, *_):
+        self._had_focus = True
+        return False
+
+    def _on_focus_out(self, *_):
+        # Ignore focus changes while the dropdown is still opening (the top-bar
+        # click briefly keeps focus): only close once we really had focus.
+        # X11 can also send brief focus-out/in pairs, so check a moment later.
+        if self._had_focus:
+            GLib.timeout_add(250, self._check_focus_lost)
+        return False
+
+    def _check_focus_lost(self):
+        if self.get_visible() and not self.is_active() and not self._dialog_open:
+            self._closed_by_focus_at = time.monotonic()
+            self.close_dropdown()
+        return GLib.SOURCE_REMOVE
+
+    def _on_key(self, _widget, event):
+        if event.keyval == Gdk.KEY_Escape and self._editing is None:
+            self.close_dropdown()
+            return True
+        return False
+
+    def _edit_state(self, row: NoteRow, editing: bool) -> None:
+        if editing:
+            if self._editing is not None and self._editing is not row:
+                self._editing.finish_edit(save=True)
+            self._editing = row
+        elif self._editing is row:
+            self._editing = None
+            if self._dirty:
+                self._dirty = False
+                _idle(self.refresh)
+
+    # ---- content ----------------------------------------------------------
+
+    def _build_permission_bar(self) -> Gtk.Widget:
+        self.perm_bar = Gtk.InfoBar(message_type=Gtk.MessageType.WARNING)
+        label = Gtk.Label(label="Hold-to-record is off: FloatNote needs permission to see your keyboard.",
+                          xalign=0, wrap=True, hexpand=True, max_width_chars=1)
+        self.perm_bar.get_content_area().add(label)
+        self.perm_bar.add_button("Turn on…", 1)
+        self.perm_bar.connect("response", lambda *_: self._ask_hold_permission())
+        return self.perm_bar
+
+    def _ask_hold_permission(self):
+        dialog = Gtk.MessageDialog(
+            transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.NONE, text="Turn on hold-to-record?")
+        dialog.format_secondary_text(
+            "GNOME doesn't tell apps when a key is released, so FloatNote reads the keyboard directly. "
+            "That needs your user in the 'input' group (your password is asked next).\n\n"
+            "FloatNote only looks at modifier keys and never stores what you type, but any program you "
+            "run could then read keystrokes. You can undo it any time with:\n"
+            "sudo gpasswd -d $USER input")
+        dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Turn on", Gtk.ResponseType.OK)
+
+        def answered(response):
+            if response == Gtk.ResponseType.OK:
+                self.flash("Waiting for your password…")
+                threading.Thread(target=self._enable_hold_keys, daemon=True).start()
+
+        self._run_dialog(dialog, answered)
+
+    def _enable_hold_keys(self):  # worker thread: pkexec waits for the password dialog
+        ok, message = self.app.daemon.enable_hold_keys()
+        if ok:
+            _idle(self.flash, "Turned on. Restarting FloatNote…")
+            GLib.timeout_add(800, lambda: self.app.daemon.restart() and False)
+        else:
+            _idle(self.flash, message)
+
+    def refresh(self):
+        store = self.app.store
+        project = store.project(store.active_project_id())
+        bugs = store.session_notes(project.id)
+        open_ideas = store.ideas()
+        self.copy_btn.set_label(f"Copy all ({len(bugs)})" if bugs else "Copy all")
+        self.copy_btn.set_sensitive(bool(bugs))
+        self.project_label.set_text(f"{project.name} · {len(bugs)}" if bugs else project.name)
+        from .hotkeys import NO_PERMISSION
+
+        no_permission = (self.app.daemon.hold_error == NO_PERMISSION
+                         and not self.app.daemon.user_in_input_group())
+        self.perm_bar.set_visible(no_permission)
+        self.update_status()
+        if not self.get_visible():
+            return
+        if self._editing is not None:
+            self._dirty = True
+            return
+        self._fill_bugs(bugs)
+        self._fill_ideas(store.ideas(include_done=True) if self.show_done.get_active() else open_ideas)
+        self._fill_words()
+        self._fill_projects()
+
+    def _fill_bugs(self, bugs):
+        _clear(self.bug_list)
+        for _ in range(self.app.daemon.ui_state()["pending"]):
+            self.bug_list.add(_pending_row())
+        # Newest first; numbers match the copied list (which is oldest first).
+        for i, note in reversed(list(enumerate(bugs, 1))):
+            num = Gtk.Label(label=f"{i}.")
+            num.get_style_context().add_class("fn-num")
+            to_idea = _icon_button("starred-symbolic", "Move to ideas", lambda note=note: self._to_idea(note))
+            self.bug_list.add(NoteRow(note, num, on_save=self._save, on_delete=self._delete_bug,
+                                      on_edit_state=self._edit_state, extra_buttons=[to_idea]))
+        self.bug_list.show_all()
+
+    def _fill_ideas(self, ideas):
+        _clear(self.idea_list)
+        for note in sorted(ideas, key=lambda n: n.done):  # open first, newest first within
+            check = Gtk.CheckButton(active=note.done, tooltip_text="Done")
+            check.connect("toggled", lambda b, note=note: self._set_done(note, b.get_active()))
+            self.idea_list.add(NoteRow(note, check, on_save=self._save, on_delete=self._delete_idea,
+                                       on_edit_state=self._edit_state, subtitle=note.created_at[:10]))
+        self.idea_list.show_all()
+
+    def _fill_words(self):
+        cfg = self.app.daemon.cfg
+        _clear(self.fix_list)
+        for heard, right in sorted(cfg.replacements.items()):
+            self.fix_list.add(_chip([heard, right], lambda h=heard: self._remove_fix(h)))
+        self.fix_list.show_all()
+        self.fix_empty.set_visible(not cfg.replacements)
+        _clear(self.hint_list)
+        for word in cfg.vocabulary:
+            self.hint_list.add(_chip([word], lambda w=word: self._remove_hint(w)))
+        self.hint_list.show_all()
+
+    # ---- note actions -----------------------------------------------------
+
+    def _save(self, note, text):
+        self.app.store.update_text(note.id, text)
+        self._offer_fix(note.text, text)
+        _idle(self.refresh)
+
+    def _delete_bug(self, note):
+        self.app.store.delete(note.id)
+        _idle(self.refresh)
+
+    def _delete_idea(self, note):
+        dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
+                                   buttons=Gtk.ButtonsType.OK_CANCEL, text="Delete this idea?")
+        dialog.format_secondary_text(note.text)
+        dialog.set_keep_above(True)
+        self._dialog_open = True
+        try:
+            if dialog.run() == Gtk.ResponseType.OK:
+                self.app.store.delete(note.id)
+                _idle(self.refresh)
+        finally:
+            dialog.destroy()
+            self._dialog_open = False
+            self._focus()
+
+    # ---- projects -----------------------------------------------------------
+
+    def _build_projects_page(self) -> Gtk.Widget:
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.new_project = Gtk.Entry(placeholder_text="New project name, press Enter", margin=6)
+        self.new_project.connect("activate", lambda e: self._add_project(e.get_text()))
+        self.project_error = Gtk.Label(xalign=0, wrap=True, max_width_chars=1, margin_start=10, margin_end=10)
+        self.project_error.get_style_context().add_class("fn-error")
+        self.project_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        self.project_list.connect("row-activated", lambda _l, row: self._activate_project(row.project_id))
+        explain = Gtk.Label(label="Click a project to make it active: new bugs and Copy all use it. "
+                                  "Link a folder so `floatnote list` in that folder (e.g. from Claude Code) "
+                                  "picks this project.",
+                            xalign=0, wrap=True, max_width_chars=1, margin=10)
+        explain.get_style_context().add_class("fn-date")
+        page.pack_start(self.new_project, False, False, 0)
+        page.pack_start(self.project_error, False, False, 0)
+        page.pack_start(Gtk.Separator(), False, False, 0)
+        page.pack_start(self.project_list, False, False, 0)
+        page.pack_start(explain, False, False, 0)
+        return _scrolled(page)
+
+    def _fill_projects(self):
+        from .store import GENERAL_ID
+
+        store = self.app.store
+        active, counts = store.active_project_id(), store.bug_counts()
+        _clear(self.project_list)
+        for project in store.projects():
+            row = Gtk.ListBoxRow(selectable=False)
+            row.project_id = project.id
+            box = Gtk.Box(spacing=6)
+            box.get_style_context().add_class("fn-row")
+            mark = (Gtk.Image.new_from_icon_name("object-select-symbolic", Gtk.IconSize.BUTTON)
+                    if project.id == active else Gtk.Image())
+            mark.set_size_request(16, -1)
+            mark.set_valign(Gtk.Align.START)
+            box.pack_start(mark, False, False, 0)
+            texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True)
+            name = Gtk.Label(label=project.name, xalign=0, ellipsize=Pango.EllipsizeMode.END, max_width_chars=1)
+            if project.id == active:
+                name.get_style_context().add_class("fn-project")
+            n = counts.get(project.id, 0)
+            folder = project.folder.replace(str(Path.home()), "~") if project.folder else "no folder"
+            sub = Gtk.Label(label=f"{n} bug{'s' if n != 1 else ''} · {folder}", xalign=0,
+                            ellipsize=Pango.EllipsizeMode.MIDDLE, max_width_chars=1)
+            sub.get_style_context().add_class("fn-date")
+            texts.pack_start(name, False, False, 0)
+            texts.pack_start(sub, False, False, 0)
+            box.pack_start(texts, True, True, 0)
+            box.pack_start(_icon_button("folder-symbolic", "Link a code folder",
+                                        lambda p=project: self._choose_folder(p)), False, False, 0)
+            box.pack_start(_icon_button("document-edit-symbolic", "Rename",
+                                        lambda p=project: self._rename_project(p)), False, False, 0)
+            delete = _icon_button("user-trash-symbolic", "Delete", lambda p=project: self._delete_project(p))
+            delete.set_sensitive(project.id != GENERAL_ID)
+            if project.id == GENERAL_ID:
+                delete.set_tooltip_text("General can be renamed, not deleted")
+            box.pack_start(delete, False, False, 0)
+            row.add(box)
+            self.project_list.add(row)
+        self.project_list.show_all()
+
+    def _fill_project_menu(self):
+        """Contents of the '▾' project selector."""
+        for child in self.project_popover.get_children():
+            self.project_popover.remove(child)
+        store = self.app.store
+        active, counts = store.active_project_id(), store.bug_counts()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, margin=4)
+        for project in store.projects():
+            n = counts.get(project.id, 0)
+            label = Gtk.Label(label=f"{'✓ ' if project.id == active else '    '}{project.name}"
+                                    + (f"  ({n})" if n else ""), xalign=0)
+            item = Gtk.Button(relief=Gtk.ReliefStyle.NONE)
+            item.add(label)
+            item.get_style_context().add_class("fn-menu-item")
+            item.connect("clicked", lambda _b, pid=project.id: self._activate_project(pid))
+            box.pack_start(item, False, False, 0)
+        box.pack_start(Gtk.Separator(margin_top=4, margin_bottom=4), False, False, 0)
+        manage = Gtk.Button(label="+ New / manage projects…", relief=Gtk.ReliefStyle.NONE)
+        manage.get_child().set_xalign(0)
+        manage.connect("clicked", lambda *_: self._open_projects_tab())
+        box.pack_start(manage, False, False, 0)
+        box.show_all()
+        self.project_popover.add(box)
+
+    def _open_projects_tab(self):
+        self.project_popover.popdown()
+        self._tab_buttons["projects"].set_active(True)
+        self.new_project.grab_focus()
+
+    def _activate_project(self, project_id: int):
+        self.project_popover.popdown()
+        self.app.daemon.set_active_project(project_id)  # notifies: refresh + flash
+
+    def _add_project(self, name: str):
+        try:
+            pid = self.app.store.add_project(name)
+        except ValueError as e:
+            self.project_error.set_text(str(e))
+            return
+        self.project_error.set_text("")
+        self.new_project.set_text("")
+        self.app.daemon.set_active_project(pid)
+
+    def _rename_project(self, project):
+        dialog = Gtk.Dialog(title="Rename project", transient_for=self, modal=True)
+        dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Rename", Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        entry = Gtk.Entry(text=project.name, activates_default=True, margin=10)
+        dialog.get_content_area().add(entry)
+        dialog.show_all()
+        self._run_dialog(dialog, lambda r: r == Gtk.ResponseType.OK and self._do_rename(project, entry.get_text()))
+
+    def _do_rename(self, project, name):
+        try:
+            self.app.store.rename_project(project.id, name)
+            self.project_error.set_text("")
+        except ValueError as e:
+            self.project_error.set_text(str(e))
+        _idle(self.app.refresh_all)
+
+    def _choose_folder(self, project):
+        dialog = Gtk.FileChooserDialog(title=f"Code folder for {project.name}", transient_for=self,
+                                       action=Gtk.FileChooserAction.SELECT_FOLDER, modal=True)
+        dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL)
+        if project.folder:
+            dialog.add_button("Unlink folder", 2)
+            dialog.set_current_folder(project.folder)
+        else:
+            dialog.set_current_folder(str(Path.home()))
+        dialog.add_button("Link this folder", Gtk.ResponseType.OK)
+
+        def done(response):
+            if response == Gtk.ResponseType.OK:
+                self.app.store.set_project_folder(project.id, dialog.get_filename())
+            elif response == 2:
+                self.app.store.set_project_folder(project.id, None)
+            _idle(self.refresh)
+
+        self._run_dialog(dialog, done)
+
+    def _delete_project(self, project):
+        from .store import GENERAL_ID
+
+        n = self.app.store.bug_counts().get(project.id, 0)
+        general = self.app.store.project(GENERAL_ID).name
+        dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
+                                   text=f'Delete the project "{project.name}"?')
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        if n:
+            dialog.format_secondary_text(f"It still has {n} bug{'s' if n != 1 else ''}.")
+            dialog.add_button(f"Move bugs to {general}", 1)
+            dialog.add_button("Delete bugs too", 2)
+        else:
+            dialog.add_button("Delete", 1)
+
+        def done(response):
+            if response in (1, 2):
+                self.app.store.delete_project(project.id, move_bugs_to=GENERAL_ID if response == 1 else None)
+                self.flash(f'Deleted "{project.name}"')
+                _idle(self.app.refresh_all)
+
+        self._run_dialog(dialog, done)
+
+    def _run_dialog(self, dialog, on_response):
+        """Run a modal dialog without the dropdown closing because focus moved to it."""
+        dialog.set_keep_above(True)
+        self._dialog_open = True
+        try:
+            on_response(dialog.run())
+        finally:
+            dialog.destroy()
+            self._dialog_open = False
+            self._focus()
+
+    def _to_idea(self, note):
+        self.app.store.set_kind(note.id, "idea")
+        self.flash("Moved to Ideas")
+        _idle(self.refresh)
+
+    def _set_done(self, note, done):
+        self.app.store.set_done(note.id, done)
+        _idle(self.refresh)
+
+    def _add_idea(self, text: str):
+        self.app.store.add("idea", text)
+        self.flash("Idea saved")
+        _idle(self.refresh)
+
+    def _add_bug(self, text: str):
+        self.app.store.add("bug", text, project_id=self.app.store.active_project_id())
+        self.flash("Bug saved")
+        _idle(self.app.refresh_all)
+
+    # ---- words ------------------------------------------------------------
+
+    def _set_words(self, vocabulary, replacements):
+        self.app.daemon.set_words(vocabulary, replacements)
+        _idle(self.refresh)
+
+    def _add_fix(self):
+        heard = self.fix_heard.get_text().strip().lower()
+        right = self.fix_right.get_text().strip()
+        if not heard or not right:
+            return
+        cfg = self.app.daemon.cfg
+        vocab = cfg.vocabulary if right in cfg.vocabulary else [*cfg.vocabulary, right]
+        self._set_words(vocab, {**cfg.replacements, heard: right})
+        self.fix_heard.set_text("")
+        self.fix_right.set_text("")
+        self.flash(f'Will write "{right}" for "{heard}"')
+
+    def _remove_fix(self, heard):
+        fixes = dict(self.app.daemon.cfg.replacements)
+        fixes.pop(heard, None)
+        self._set_words(self.app.daemon.cfg.vocabulary, fixes)
+
+    def _add_hint(self):
+        word = self.hint_entry.get_text().strip()
+        cfg = self.app.daemon.cfg
+        if word and word not in cfg.vocabulary:
+            self._set_words([*cfg.vocabulary, word], cfg.replacements)
+        self.hint_entry.set_text("")
+
+    def _remove_hint(self, word):
+        cfg = self.app.daemon.cfg
+        self._set_words([w for w in cfg.vocabulary if w != word], cfg.replacements)
+
+    def _offer_fix(self, before: str, after: str):
+        fix = suggest_fix(before, after, self.app.daemon.cfg.replacements)
+        if fix is None:
+            return
+        self._suggestion = fix
+        self.suggest_label.set_text(f'Always write "{fix[1]}" when FloatNote hears "{fix[0]}"?')
+        self.suggest_bar.show()
+
+    def _on_suggest_response(self, _bar, response):
+        if response == 1 and self._suggestion:
+            heard, right = self._suggestion
+            cfg = self.app.daemon.cfg
+            vocab = cfg.vocabulary if right in cfg.vocabulary else [*cfg.vocabulary, right]
+            self._set_words(vocab, {**cfg.replacements, heard: right})
+            self.flash(f'Saved "{heard}" → "{right}" in Settings → Words')
+        self._suggestion = None
+        self.suggest_bar.hide()
+
+    # ---- status line ------------------------------------------------------
+
+    def flash(self, message: str):
+        self._flash = message
+        self._flash_until = time.monotonic() + FLASH_SECONDS
+        self.update_status()
+
+    def update_status(self):
+        state = self.app.daemon.ui_state()
+        if state["recording"]:
+            secs = int(time.monotonic() - state["started_at"])
+            text = f"● Recording {state['recording']}  {secs // 60}:{secs % 60:02d}"
+        elif time.monotonic() < self._flash_until:
+            text = self._flash
+        elif state["model_error"]:
+            text = "Speech model failed, see log"
+        elif not state["model_ready"]:
+            text = state.get("model_status") or "Loading speech model…"
+        elif state["pending"]:
+            text = "Transcribing…"
+        elif state["hold_error"]:
+            text = "Hold keys off: run floatnote doctor"
+        else:
+            text = ""  # quiet when idle; the guide (ⓘ) explains the keys
+        self.status.set_text(text)
+        needs_tick = state["recording"] or time.monotonic() < self._flash_until
+        if needs_tick and not self._tick_id:
+            self._tick_id = GLib.timeout_add(500, self._tick)
+
+    def _tick(self):
+        self._tick_id = 0
+        self.update_status()  # re-arms itself while still needed
+        return GLib.SOURCE_REMOVE
+
+
+class App:
+    def __init__(self, daemon):
+        if Gdk.Display.get_default() is None:
+            raise RuntimeError("no display available")
+        self.daemon = daemon
+        self.store = daemon.store
+        self.settings = self._load_settings()
+        self._green_until = 0.0
+
+        css = Gtk.CssProvider()
+        css.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css,
+                                                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self.dropdown = Dropdown(self)
+        self.panel = self.dropdown  # old name, used by tests/tools
+        try:
+            from .tray import Tray
+
+            self.tray = Tray(lambda x, y: self.dropdown.toggle(x))
+        except Exception:  # noqa: BLE001 - FloatNote still works from the shortcuts
+            import logging
+
+            logging.getLogger("floatnote").exception("top-bar icon unavailable")
+            self.tray = None
+        daemon.ui = self
+        self._update_indicators()
+
+    # ---- thread-safe entry points (called by the daemon) ------------------
+
+    def changed(self, message: str | None = None, event: str | None = None) -> None:
+        _idle(self._changed, message, event)
+
+    def show_panel(self, kind: str | None = None) -> None:
+        _idle(self.dropdown.open_dropdown, None, {"bug": "bugs", "idea": "ideas"}.get(kind))
+
+    def toggle_panel(self) -> None:
+        _idle(self.dropdown.toggle)
+
+    def open_home(self) -> None:
+        _idle(self.dropdown.open_dropdown, None, "ideas")
+
+    def quit(self) -> None:
+        _idle(Gtk.main_quit)
+
+    # ---- main thread ------------------------------------------------------
+
+    def refresh_all(self):
+        self.dropdown.refresh()
+        self._update_indicators()
+
+    def _changed(self, message, event):
+        if event == "copied":
+            self._green_until = time.monotonic() + COPIED_GREEN_SECONDS
+            GLib.timeout_add(int(COPIED_GREEN_SECONDS * 1000) + 50, lambda: self._update_indicators() and False)
+        if message:
+            self.dropdown.flash(message)
+        self.dropdown.refresh()
+        self._update_indicators()
+
+    def _update_indicators(self):
+        if self.tray is None:
+            return
+        state = self.daemon.ui_state()
+        project = self.store.project(self.store.active_project_id())
+        bugs = len(self.store.session_notes(project.id))
+        if state["recording"]:
+            icon, body = state["recording"], f"Recording {state['recording']}…"
+        elif time.monotonic() < self._green_until:
+            icon, body = "ok", "Copied"
+        elif state["pending"] or not state["model_ready"]:
+            icon, body = "busy", "Transcribing…" if state["pending"] else state.get("model_status", "")
+        else:
+            icon, body = "idle", f"{project.name}: {bugs} bug(s) waiting" if bugs else f"{project.name}: ready"
+        self.tray.set_icon(icon)
+        from .tray import bar_label
+
+        self.tray.set_label(bar_label(project.name) if self.daemon.cfg.show_project_in_bar else "")
+        self.tray.set_tooltip("FloatNote", body)
+        self.tray.set_badge(bugs)
+
+    def run(self):
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig, self._on_signal)
+        Gtk.main()
+
+    def _on_signal(self, *_):
+        Gtk.main_quit()
+        return GLib.SOURCE_REMOVE
+
+    # ---- small persisted UI settings --------------------------------------
+
+    def _load_settings(self) -> dict:
+        try:
+            return json.loads(paths.ui_state_file().read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def save_settings(self) -> None:
+        try:
+            paths.ui_state_file().write_text(json.dumps(self.settings))
+        except OSError:
+            pass

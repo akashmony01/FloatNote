@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "floatnote"
+dynamic = ["version"]  # from src/floatnote/__init__.py
+description = "Hold a key, talk, and your bug notes are ready to paste into Claude Code. Offline voice notes for Linux (GNOME)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "akashmony01" }]
+keywords = ["voice notes", "speech to text", "whisper", "gnome", "claude code", "bug reports"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: X11 Applications :: GTK",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+    "faster-whisper>=1.1,<2",
+    "av<17",  # PyAV 17+ dropped an argument faster-whisper 1.2 still passes
+    "sounddevice>=0.5,<1",
+    "numpy>=1.26,<3",
+]
+# PyGObject (GTK3) comes from the system package python3-gi; the venv is
+# created with --system-site-packages so it does not need to be built.
+
+[project.urls]
+Homepage = "https://github.com/akashmony01/FloatNote"
+Issues = "https://github.com/akashmony01/FloatNote/issues"
+Changelog = "https://github.com/akashmony01/FloatNote/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+floatnote = "floatnote.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "floatnote.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+floatnote = ["icons/*.svg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

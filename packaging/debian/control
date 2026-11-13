@@ -1,0 +1,19 @@
+Package: floatnote
+Version: @VERSION@
+Section: utils
+Priority: optional
+Architecture: all
+Installed-Size: @SIZE@
+Maintainer: akashmony01 <akashmony01@users.noreply.github.com>
+Depends: python3 (>= 3.11), python3-venv, python3-gi, gir1.2-gtk-3.0, libportaudio2, wl-clipboard, xclip, pipewire-bin | pulseaudio-utils, pkexec | policykit-1
+Recommends: gnome-shell-extension-appindicator
+Homepage: https://github.com/akashmony01/FloatNote
+Description: hold a key, talk, get a bug list for Claude Code
+ FloatNote records short voice notes while you test an app: hold Ctrl+Super,
+ describe the problem, let go. Speech is transcribed on your computer with
+ faster-whisper. When you're done, one key copies all notes as a numbered list
+ to paste into Claude Code, or Claude Code reads them with `floatnote list`.
+ .
+ Installing downloads FloatNote's Python libraries from PyPI into
+ /usr/lib/floatnote/venv; the speech model (~460 MB) is downloaded on first
+ start. Built for Ubuntu 24.04 or newer with GNOME.

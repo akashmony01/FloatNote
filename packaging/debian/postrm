@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+# The venv was created by postinst, so dpkg doesn't know its files: remove it here.
+# Your notes (~/.local/share/floatnote) and settings (~/.config/floatnote) are kept.
+case "$1" in
+    remove|purge)
+        rm -rf /usr/lib/floatnote/venv
+        rmdir /usr/lib/floatnote 2>/dev/null || true
+        ;;
+esac
+
+exit 0
