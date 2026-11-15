@@ -1,10 +1,10 @@
-"""Top-bar icon (StatusNotifierItem) and dock badge (Unity LauncherEntry).
+"""Panel (tray) icon (StatusNotifierItem) and dock badge (Unity LauncherEntry).
 
 Implemented directly over D-Bus instead of libappindicator so that a left
 click calls Activate(x, y) with the click position: we open our own dropdown
 there, instead of the plain menu an AppIndicator would show.
-GNOME shows these icons through the AppIndicator extension (on by default in
-Ubuntu). Must run on the GLib main loop.
+KDE, Cinnamon and XFCE show these icons natively; GNOME needs the AppIndicator
+extension (on by default in Ubuntu). Must run on the GLib main loop.
 """
 
 import logging
@@ -55,11 +55,24 @@ _WATCHER = "org.kde.StatusNotifierWatcher"
 _BADGE_PATH = "/com/canonical/unity/launcherentry/floatnote"
 
 
-BAR_LABEL_MAX = 16  # longer project names are shortened with "…" in the top bar
+def no_host_hint() -> str:
+    """How to get a tray on this desktop."""
+    from .shortcuts import detect_desktop
+
+    return {
+        "gnome": "enable the AppIndicator extension (on by default in Ubuntu; "
+                 "Fedora: sudo dnf install gnome-shell-extension-appindicator, then log out and in)",
+        "xfce": "add the Status Tray Plugin to your panel",
+        "kde": "add the System Tray widget to your panel",
+        "cinnamon": "add the Xapp Status applet to your panel",
+    }.get(detect_desktop() or "", "your panel needs a StatusNotifier (AppIndicator) tray")
+
+
+BAR_LABEL_MAX = 16  # longer project names are shortened with "…" in the panel
 
 
 def bar_label(name: str, limit: int = BAR_LABEL_MAX) -> str:
-    """Project name for the top bar: 'My very long project name' -> 'My very long pr…'."""
+    """Project name for the panel: 'My very long project name' -> 'My very long pr…'."""
     name = " ".join(name.split())
     return name if len(name) <= limit else name[: limit - 1].rstrip() + "…"
 
@@ -81,7 +94,7 @@ class Tray:
     # ---- registration ------------------------------------------------------
 
     def _on_name_acquired(self, *_):
-        # (Re-)register whenever the watcher (the AppIndicator extension) appears.
+        # (Re-)register whenever the watcher (the panel's tray) appears.
         Gio.bus_watch_name_on_connection(self._bus, _WATCHER, Gio.BusNameWatcherFlags.NONE,
                                          self._register, self._watcher_gone)
 
@@ -93,12 +106,12 @@ class Tray:
     def _registered(self, bus, result):
         try:
             bus.call_finish(result)
-            log.info("top-bar icon registered")
+            log.info("panel icon registered")
         except GLib.Error as e:
-            log.warning("top-bar icon not registered: %s", e.message)
+            log.warning("panel icon not registered: %s", e.message)
 
     def _watcher_gone(self, *_):
-        log.warning("no top-bar icon host (is the Ubuntu AppIndicators extension enabled?)")
+        log.warning("no panel icon host: %s", no_host_hint())
 
     # ---- D-Bus callbacks ---------------------------------------------------
 
@@ -143,7 +156,7 @@ class Tray:
             self._emit("NewIcon")
 
     def set_label(self, text: str) -> None:
-        """Text shown right of the icon in the top bar; "" hides it."""
+        """Text shown right of the icon in the panel (GNOME; KDE/XFCE ignore it); "" hides it."""
         if text != self._label:
             self._label = text
             self._emit("XAyatanaNewLabel", GLib.Variant("(ss)", (text, text)))

@@ -1,15 +1,18 @@
-"""Hold-to-record: watch modifier keys straight from the keyboard devices.
+"""FloatNote's keyboard shortcuts, read straight from the keyboard devices.
 
-GNOME on Wayland never tells apps when a global shortcut is *released*, so
-hold-to-talk can't use normal shortcuts. Instead this reads /dev/input (needs
-the user in the 'input' group). Only modifier state is tracked; key codes of
-other keys are kept in memory just long enough to know they're held, never
-stored or logged.
+Wayland desktops never tell apps when a global shortcut is *released*, so
+hold-to-talk can't use normal shortcuts, and every desktop has its own
+shortcut settings. Instead this reads /dev/input (needs the user in the
+'input' group), which works the same on GNOME, KDE, Cinnamon, XFCE, Wayland
+and X11. Only modifier state and the few keys used by FloatNote's shortcuts
+are tracked; key codes of other keys are kept in memory just long enough to
+know they're held, never stored or logged.
 
 Rules (see ChordTracker):
 - Hold exactly a configured combo (e.g. Ctrl+Super+Left) for `delay` seconds: start.
 - Release any key of the combo: stop (transcribe).
 - Press any other key while holding: cancel (it was a normal shortcut).
+- Press a key shortcut (e.g. Ctrl+Super+Alt+N): fire it straight away.
 """
 
 import errno
@@ -38,8 +41,8 @@ KEYS = {"left": {105}, "right": {106}, "up": {103}, "down": {108}, "space": {57}
 _CODE_TO_MOD = {code: mod for mod, codes in MODIFIERS.items() for code in codes}
 _CODE_TO_KEY = {code: key for key, codes in KEYS.items() for code in codes}
 
-# Every key a captured shortcut may use (for the open/close shortcut, which
-# GNOME handles, any letter/digit/F-key works too).
+# Every key a captured shortcut may use (for the open/close and next-project
+# shortcuts any letter/digit/F-key works too).
 _LETTER_CODES = dict(zip("qwertyuiop", range(16, 26))) | dict(zip("asdfghjkl", range(30, 39))) \
     | dict(zip("zxcvbnm", range(44, 51)))
 NAMED_KEYS: dict[int, str] = {
@@ -48,6 +51,10 @@ NAMED_KEYS: dict[int, str] = {
     **{59 + i: f"f{i + 1}" for i in range(10)}, 87: "f11", 88: "f12",
     **_CODE_TO_KEY, **_CODE_TO_MOD,
 }
+_NAME_TO_CODES: dict[str, set[int]] = {}
+for _code, _name in NAMED_KEYS.items():
+    if _name not in MODIFIERS:
+        _NAME_TO_CODES.setdefault(_name, set()).add(_code)
 _ORDER = ["ctrl", "super", "alt", "shift"]
 KEY_ESC = 1
 
@@ -88,6 +95,18 @@ def parse_combo(text: str) -> frozenset[str]:
     return names
 
 
+def parse_key_combo(text: str) -> frozenset[str]:
+    """'ctrl+super+alt+n' -> {'ctrl', 'super', 'alt', 'n'}: modifiers plus exactly
+    one letter, digit, F-key, arrow or Space (open/close, next project)."""
+    parts = [p.strip().lower() for p in text.split("+") if p.strip()]
+    names = frozenset(_ALIASES.get(p, p) for p in parts)
+    keys = [n for n in names if n not in MODIFIERS]
+    if not names & MODIFIERS.keys() or len(keys) != 1 or keys[0] not in _NAME_TO_CODES:
+        raise ValueError(f"bad shortcut {text!r}: use modifier keys plus one letter, number, "
+                         "arrow or F-key, e.g. ctrl+super+alt+n")
+    return names
+
+
 def validate_keys(bug: str, idea: str, copy: str, toggle: str, next_project: str | None = None) -> str | None:
     """Check a full set of shortcuts. Returns a message for the user, or None if fine."""
     labels = {"bug": "Record bug", "idea": "Record idea", "copy": "Copy bugs", "toggle": "Open/close",
@@ -101,16 +120,15 @@ def validate_keys(bug: str, idea: str, copy: str, toggle: str, next_project: str
                     "optionally with one arrow key.")
         if len(combos[which]) < 2:
             return f"{labels[which]}: use at least two keys, e.g. Ctrl+Super."
-    # GNOME shortcuts: modifiers plus exactly one normal key.
+    # Key shortcuts: modifiers plus exactly one normal key.
     for which, text in (("toggle", toggle), ("next", next_project)):
         if text is None:
             continue
-        names = set(text.split("+"))
-        keys = [n for n in names if n not in MODIFIERS]
-        if not names & MODIFIERS.keys() or len(keys) != 1 or keys[0] not in NAMED_KEYS.values():
+        try:
+            combos[which] = parse_key_combo(text)
+        except ValueError:
             return (f"{labels[which]}: use modifier keys plus one letter, number, arrow or F-key, "
                     "e.g. Ctrl+Super+Alt+N.")
-        combos[which] = frozenset(names)
     seen = {}
     for which, combo in combos.items():
         if combo in seen:
@@ -120,10 +138,11 @@ def validate_keys(bug: str, idea: str, copy: str, toggle: str, next_project: str
 
 
 def to_accelerator(toggle: str) -> str:
-    """'ctrl+super+alt+n' -> '<Control><Super><Alt>n' (GNOME's format)."""
-    gnome = {"ctrl": "<Control>", "super": "<Super>", "alt": "<Alt>", "shift": "<Shift>"}
+    """'ctrl+super+alt+n' -> '<Control><Super><Alt>n' (GTK's format, used by GNOME,
+    Cinnamon and XFCE)."""
+    gtk = {"ctrl": "<Control>", "super": "<Super>", "alt": "<Alt>", "shift": "<Shift>"}
     names = toggle.split("+")
-    mods = "".join(gnome[m] for m in _ORDER if m in names)
+    mods = "".join(gtk[m] for m in _ORDER if m in names)
     key = next(n for n in names if n not in MODIFIERS)
     key = {"left": "Left", "right": "Right", "up": "Up", "down": "Down"}.get(key) or \
         (key.upper() if key.startswith("f") and len(key) > 1 else key)
@@ -132,19 +151,28 @@ def to_accelerator(toggle: str) -> str:
 
 class ChordTracker:
     """Pure state machine. Feed key events, collect actions:
-    ("start", kind), ("stop",), ("cancel",), ("tap", name).
+    ("start", kind), ("stop",), ("cancel",), ("tap", name), ("key", name).
 
     combos: hold gestures, e.g. {ctrl, super} -> "bug".
     taps:   press-and-release gestures, e.g. {ctrl, super, alt} -> "copy". A tap
             fires when you let go, but only if no other key was pressed, so
             Ctrl+Super+Alt+N can still be a normal shortcut.
+    keys:   normal shortcuts, modifiers plus one key, e.g. {ctrl, super, alt, n}
+            -> "toggle". Fires when the key goes down while exactly those
+            modifiers (and no other key) are held. Counts as "another key" for
+            the gestures above, so it never copies or records.
     """
 
     def __init__(self, combos: dict[frozenset[str], str], delay: float = 0.25,
-                 taps: dict[frozenset[str], str] | None = None):
+                 taps: dict[frozenset[str], str] | None = None,
+                 keys: dict[frozenset[str], str] | None = None):
         self.combos = combos
         self.taps = taps or {}
+        self.keys = keys or {}
         self.delay = delay
+        # code -> key name, only for the keys used by key shortcuts.
+        self._key_codes = {code: name for combo in self.keys for name in combo if name not in MODIFIERS
+                           for code in _NAME_TO_CODES[name]}
         # Keys we track by name: all modifiers plus the keys used in combos.
         used = set().union(*combos, *self.taps) if (combos or self.taps) else set()
         self._tracked = {**_CODE_TO_MOD, **{c: k for c, k in _CODE_TO_KEY.items() if k in used}}
@@ -156,8 +184,20 @@ class ChordTracker:
         self._tap: frozenset[str] | None = None  # tap gesture currently held
         self._spoiled = False  # another key was involved; wait until all keys are up
 
+    def fresh(self) -> "ChordTracker":
+        """A new tracker with the same shortcuts and no keys held."""
+        return ChordTracker(self.combos, self.delay, self.taps, self.keys)
+
     def _held(self) -> frozenset[str]:
         return frozenset(m for m, codes in self._mods.items() if codes)
+
+    def _key_shortcut(self, code: int) -> str | None:
+        """The key shortcut completed by pressing `code` now, if any."""
+        name = self._key_codes.get(code)
+        if name is None or self._others:
+            return None
+        mods = frozenset(m for m in MODIFIERS if self._mods[m])
+        return self.keys.get(mods | {name})
 
     @property
     def pending_deadline(self) -> float | None:
@@ -167,18 +207,22 @@ class ChordTracker:
         if value == 2:  # auto-repeat
             return []
         actions: list[tuple] = []
-        name = self._tracked.get(code)
+        shortcut = self._key_shortcut(code) if value else None
+        name = None if shortcut else self._tracked.get(code)
+        if not value:  # a key used by a shortcut may also be tracked (an arrow): forget it both ways
+            self._others.discard(code)
         if name:
             (self._mods[name].add if value else self._mods[name].discard)(code)
         elif value:
             self._others.add(code)
             self._spoiled = True
             self._tap = None
+            self._candidate = None
             if self._active:
                 actions.append(("cancel",))
                 self._active = None
-        else:
-            self._others.discard(code)
+        if shortcut:
+            actions.append(("key", shortcut))
 
         held = self._held()
         if self._active and held != self._active:
@@ -217,6 +261,21 @@ class ChordTracker:
             self._active, self._candidate = self._candidate, None
             return [("start", self.combos[self._active])]
         return []
+
+
+def keyboard_readable() -> bool:
+    """Can FloatNote read the keyboard (is the user allowed to open /dev/input)?"""
+    for path in glob.glob("/dev/input/event*"):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError:
+            continue
+        try:
+            if _is_keyboard(fd):
+                return True
+        finally:
+            os.close(fd)
+    return False
 
 
 def _is_keyboard(fd: int) -> bool:
@@ -285,7 +344,7 @@ class HotkeyListener(threading.Thread):
     def _finish_capture(self, error: str | None = None) -> None:
         c, self._capture = self._capture, None
         # Start fresh so half-pressed keys from the capture don't linger.
-        self.tracker = ChordTracker(self.tracker.combos, self.tracker.delay, self.tracker.taps)
+        self.tracker = self.tracker.fresh()
         if c.get("cancelled"):
             c["cb"](None, None)
             return
@@ -335,7 +394,7 @@ class HotkeyListener(threading.Thread):
         dropped), so no key stays 'stuck' down. A recording in progress is dropped."""
         if self.tracker._active:
             self._emit([("cancel",)])
-        self.tracker = ChordTracker(self.tracker.combos, self.tracker.delay, self.tracker.taps)
+        self.tracker = self.tracker.fresh()
 
     def _emit(self, actions) -> None:
         for action in actions:

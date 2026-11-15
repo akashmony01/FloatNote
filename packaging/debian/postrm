@@ -1,11 +1,12 @@
 #!/bin/sh
 set -e
 
-# The venv was created by postinst, so dpkg doesn't know its files: remove it here.
+# The venv and the speech models were created by postinst, so dpkg doesn't
+# know their files: remove them here.
 # Your notes (~/.local/share/floatnote) and settings (~/.config/floatnote) are kept.
 case "$1" in
     remove|purge)
-        rm -rf /usr/lib/floatnote/venv
+        rm -rf /usr/lib/floatnote/venv /usr/lib/floatnote/models
         rmdir /usr/lib/floatnote 2>/dev/null || true
         ;;
 esac

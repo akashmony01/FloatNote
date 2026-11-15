@@ -271,3 +271,104 @@ def test_dropped_events_reset_held_keys():
     assert listener.tracker.poll(5.0) == []
     os.close(r)
     os.close(w)
+
+
+# ---- key shortcuts (open/close, next project) --------------------------------
+
+N, P, ESC_ = 49, 25, 1
+
+
+def full_tracker():
+    from floatnote.hotkeys import parse_key_combo
+
+    return ChordTracker({parse_combo("ctrl+super"): "bug", parse_combo("super+alt"): "idea"}, delay=0.25,
+                        taps={parse_combo("ctrl+super+alt"): "copy"},
+                        keys={parse_key_combo("ctrl+super+alt+n"): "toggle",
+                              parse_key_combo("ctrl+super+alt+p"): "next"})
+
+
+def test_key_shortcut_fires_on_press_and_never_copies():
+    t = full_tracker()
+    press(t, CTRL, 0.0)
+    press(t, SUPER, 0.01)
+    press(t, ALT, 0.02)
+    assert press(t, N, 0.1) == [("key", "toggle")]
+    assert t.feed(N, 2, 0.2) == []  # auto-repeat
+    assert release(t, N, 0.3) == []
+    assert press(t, P, 0.4) == [("key", "next")]  # again while still holding the modifiers
+    release(t, P, 0.45)
+    out = release(t, ALT, 0.5) + release(t, SUPER, 0.5) + release(t, CTRL, 0.5)
+    assert ("tap", "copy") not in out
+    assert t.poll(2.0) == []  # and no recording either
+
+
+def test_key_shortcut_does_not_start_or_keep_a_recording():
+    t = full_tracker()
+    press(t, CTRL, 0.0)
+    press(t, SUPER, 0.0)
+    press(t, ALT, 0.1)  # the bug candidate is gone, nothing recorded yet
+    assert t.poll(1.0) == []
+    assert press(t, N, 1.1) == [("key", "toggle")]
+
+
+def test_key_shortcut_needs_exact_modifiers():
+    t = full_tracker()
+    press(t, CTRL, 0.0)
+    press(t, ALT, 0.0)
+    assert press(t, N, 0.1) == []  # Ctrl+Alt+N: not ours
+    release(t, N, 0.2)
+    press(t, SUPER, 0.3)
+    press(t, SHIFT, 0.3)
+    assert press(t, N, 0.4) == []  # extra Shift
+
+
+def test_key_shortcut_ignored_while_another_key_is_down():
+    t = full_tracker()
+    for code in (CTRL, SUPER, ALT, A):
+        press(t, code, 0.0)
+    assert press(t, N, 0.1) == []
+
+
+def test_key_shortcut_cancels_a_running_recording():
+    t = full_tracker()
+    press(t, CTRL, 0.0)
+    press(t, SUPER, 0.0)
+    assert t.poll(0.3) == [("start", "bug")]
+    out = press(t, ALT, 0.5) + press(t, N, 0.6)
+    assert ("cancel",) in out and ("key", "toggle") in out
+
+
+def test_tracker_fresh_keeps_shortcuts():
+    t = full_tracker()
+    press(t, CTRL, 0.0)
+    f = t.fresh()
+    assert f.keys == t.keys and f.taps == t.taps and f.combos == t.combos
+    assert f._held() == frozenset()
+
+
+def test_parse_key_combo():
+    from floatnote.hotkeys import parse_key_combo
+
+    assert parse_key_combo("Ctrl+Super+Alt+N") == {"ctrl", "super", "alt", "n"}
+    assert parse_key_combo("meta+f5") == {"super", "f5"}
+    for bad in ("ctrl+super", "n", "ctrl+n+m", "ctrl+tab"):
+        with pytest.raises(ValueError):
+            parse_key_combo(bad)
+
+
+def test_arrow_in_hold_combo_and_key_shortcut():
+    from floatnote.hotkeys import parse_key_combo
+
+    t = ChordTracker({parse_combo("ctrl+super+left"): "bug"}, delay=0.25,
+                     keys={parse_key_combo("ctrl+alt+left"): "next"})
+    press(t, CTRL, 0.0)
+    press(t, ALT, 0.0)
+    assert press(t, LEFT, 0.1) == [("key", "next")]
+    release(t, LEFT, 0.2)
+    release(t, ALT, 0.2)
+    release(t, CTRL, 0.2)
+    assert t._others == set() and t._held() == frozenset()
+    press(t, CTRL, 1.0)  # the hold combo with the same arrow still works afterwards
+    press(t, SUPER, 1.0)
+    press(t, LEFT, 1.0)
+    assert t.poll(1.3) == [("start", "bug")]

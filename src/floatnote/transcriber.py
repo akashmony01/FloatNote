@@ -44,7 +44,10 @@ class Transcriber:
         self.set_words(vocabulary or [], replacements or {})
         # Physical cores only; hyperthreads don't help CTranslate2 much.
         threads = max(1, (os.cpu_count() or 2) // 2)
-        self._model = WhisperModel(model, device="cpu", compute_type=compute_type, cpu_threads=threads)
+        from .models import resolve
+
+        self._model = WhisperModel(resolve(model), device="cpu", compute_type=compute_type,
+                                   cpu_threads=threads)
         self._lock = threading.Lock()  # one transcription at a time
 
     def set_words(self, vocabulary: list[str], replacements: dict[str, str]) -> None:

@@ -29,5 +29,5 @@ jobs:
 
       - name: Check shell scripts
         run: |
-          bash -n install.sh packaging/build-deb.sh
-          shellcheck --severity=warning install.sh packaging/build-deb.sh packaging/debian/postinst packaging/debian/postrm
+          bash -n install.sh packaging/build-deb.sh packaging/build-rpm.sh
+          shellcheck --severity=warning install.sh packaging/build-deb.sh packaging/build-rpm.sh packaging/debian/postinst packaging/debian/postrm

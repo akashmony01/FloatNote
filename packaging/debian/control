@@ -6,7 +6,7 @@ Architecture: all
 Installed-Size: @SIZE@
 Maintainer: akashmony01 <akashmony01@users.noreply.github.com>
 Depends: python3 (>= 3.11), python3-venv, python3-gi, gir1.2-gtk-3.0, libportaudio2, wl-clipboard, xclip, pipewire-bin | pulseaudio-utils, pkexec | policykit-1
-Recommends: gnome-shell-extension-appindicator
+Suggests: gnome-shell-extension-appindicator
 Homepage: https://github.com/akashmony01/FloatNote
 Description: hold a key, talk, get a bug list for Claude Code
  FloatNote records short voice notes while you test an app: hold Ctrl+Super,
@@ -15,5 +15,7 @@ Description: hold a key, talk, get a bug list for Claude Code
  to paste into Claude Code, or Claude Code reads them with `floatnote list`.
  .
  Installing downloads FloatNote's Python libraries from PyPI into
- /usr/lib/floatnote/venv; the speech model (~460 MB) is downloaded on first
- start. Built for Ubuntu 24.04 or newer with GNOME.
+ /usr/lib/floatnote/venv and the speech models (~600 MB) into
+ /usr/lib/floatnote/models. Works on Ubuntu 24.04 or newer, Debian 13 and
+ Linux Mint 22, with GNOME, KDE Plasma, Cinnamon or XFCE. On GNOME the top-bar
+ icon needs the AppIndicator extension (on by default in Ubuntu).

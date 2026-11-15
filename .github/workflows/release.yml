@@ -41,6 +41,14 @@ jobs:
           # Debian/Ubuntu package
           packaging/build-deb.sh "$VERSION" "dist/floatnote-$VERSION-py3-none-any.whl" dist
           cp "dist/floatnote_${VERSION}_all.deb" dist/floatnote.deb   # stable name for .../latest/download/
+
+      - name: Build the RPM (Fedora, openSUSE)
+        run: |
+          # rpmbuild from a Fedora container, so the spec is checked by Fedora's rpm.
+          docker run --rm -v "$PWD":/src -w /src registry.fedoraproject.org/fedora:latest bash -c \
+            "dnf install -y -q rpm-build && packaging/build-rpm.sh $VERSION dist/floatnote-$VERSION-py3-none-any.whl dist"
+          sudo chown -R "$USER" dist
+          cp "dist/floatnote-${VERSION}-1.noarch.rpm" dist/floatnote.rpm   # stable name for .../latest/download/
           cd dist && sha256sum -- * > SHA256SUMS
 
       - name: Release notes from CHANGELOG.md
@@ -56,19 +64,28 @@ jobs:
             exit 1
           fi
           DEB="floatnote_${VERSION}_all.deb"
+          RPM="floatnote-${VERSION}-1.noarch.rpm"
           BASE="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
           cat >> notes.md <<EOF
 
-          ### Install (Ubuntu 24.04 or newer, GNOME)
+          ### Install
+
+          Ubuntu, Debian, Linux Mint:
 
           \`\`\`bash
           wget $BASE/$DEB
           sudo apt install ./$DEB
           \`\`\`
 
-          Then open **FloatNote** from your apps: a microphone appears in the top bar. Double-click it for a short guide.
+          Fedora (openSUSE: \`sudo zypper install\` the same URL):
 
-          Without apt: download \`floatnote-$VERSION.tar.gz\`, extract it and run \`./install.sh\`. See the README for details.
+          \`\`\`bash
+          sudo dnf install $BASE/$RPM
+          \`\`\`
+
+          Then open **FloatNote** from your apps: a microphone appears in your panel. Click it for a short guide. Works on GNOME, KDE Plasma, Cinnamon and XFCE.
+
+          Arch and others: download \`floatnote-$VERSION.tar.gz\`, extract it and run \`./install.sh\`. See the README for details.
           EOF
           sed -i 's/^          //' notes.md
 

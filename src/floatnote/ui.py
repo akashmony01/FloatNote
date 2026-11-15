@@ -1,4 +1,4 @@
-"""GTK3 UI: a top-bar icon and a dropdown under it with Bugs, Ideas and Projects tabs.
+"""GTK3 UI: a panel icon and a dropdown next to it with Bugs, Ideas and Projects tabs.
 
 Everything here runs on the GTK main thread. Other threads reach the UI only
 through App.changed() / show_panel() / toggle_panel() / open_home() / quit(),
@@ -297,7 +297,7 @@ def _word_row(text: str, on_delete) -> Gtk.ListBoxRow:
 
 
 class Dropdown(Gtk.Window):
-    """Borderless panel that drops down from the top-bar icon.
+    """Borderless panel that opens next to the panel (tray) icon.
 
     Opens on a click on the icon, Ctrl+Super+Alt+N, or at login. Closes when
     you click anywhere else, press Esc, or click the icon again.
@@ -317,6 +317,9 @@ class Dropdown(Gtk.Window):
         self._had_focus = False       # only close on focus loss after we really had it
         self._closed_by_focus_at = 0.0
         self._capturing: str | None = None  # shortcut waiting for new keys
+        self._window_capture = False  # capturing from this window's key presses
+        self._click: tuple[int | None, int | None] = (None, None)  # last tray click
+        self._last_side: str | None = None  # panel side of the last usable tray click
 
         self.set_decorated(False)
         self._expanded = bool(app.settings.get("expanded"))
@@ -328,11 +331,11 @@ class Dropdown(Gtk.Window):
         self.connect("delete-event", lambda *_: self.close_dropdown() or True)
         self.connect("focus-out-event", self._on_focus_out)
         self.connect("focus-in-event", self._on_focus_in)
-        # GNOME keeps the left edge when a window shrinks; re-snap to the right.
-        self.connect("configure-event", lambda *_: _idle(self._snap_right) or False)
+        # Window managers keep the top-left corner when a window shrinks; re-snap.
+        self.connect("configure-event", lambda *_: _idle(self._snap_to_anchor) or False)
         self.connect("key-press-event", self._on_key)
 
-        # Rounded corners need an RGBA visual (fine on GNOME; falls back to square).
+        # Rounded corners need an RGBA visual (most desktops; falls back to square).
         visual = self.get_screen().get_rgba_visual()
         if visual is not None:
             self.set_visual(visual)
@@ -506,6 +509,8 @@ class Dropdown(Gtk.Window):
                 ("copy", "Copy all bugs", "press, let go"), ("toggle", "Open / close", "press"),
                 ("next", "Next project", "press")]
 
+    WINDOW_KEYS = ("toggle", "next")  # can be captured without keyboard access
+
     SETTINGS_TABS = [("keys", "Keys", "Click Change, hold the new keys together, let go."),
                      ("copy", "Copy", "The first line of what Copy all puts on the clipboard."),
                      ("speech", "Speech", "Which speech model turns your voice into text."),
@@ -606,7 +611,7 @@ class Dropdown(Gtk.Window):
         self.login_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
         self.login_switch.connect("notify::active", lambda sw, _p: not self._loading_settings
                                   and self.app.daemon.set_option("home_on_login", sw.get_active()))
-        for label, switch in (("Project name in top bar", self.bar_switch),
+        for label, switch in (("Project name next to the icon", self.bar_switch),
                               ("Start / stop sounds", self.sounds_switch),
                               ("Show ideas at login", self.login_switch)):
             row = Gtk.Box(spacing=8, margin_start=10, margin_end=10, margin_top=8)
@@ -648,9 +653,15 @@ class Dropdown(Gtk.Window):
                   "next": cfg.next_project_keys}
         for which, label in self._key_values.items():
             label.set_text(pretty_combo(values[which]))
-        for b in self._key_buttons.values():
+        # Without keyboard access the hold keys can't work (or be captured);
+        # open/close and next project are captured in this window instead.
+        reads_keyboard = self.app.daemon.can_capture_keys()
+        for which, b in self._key_buttons.items():
             b.set_label("Change")
-            b.set_sensitive(True)
+            b.set_sensitive(reads_keyboard or which in self.WINDOW_KEYS)
+        if not reads_keyboard and self._capturing is None:
+            self._key_message("Turn on keyboard access (the bar at the top) to use and change "
+                              "the hold keys.")
 
     def _on_change_clicked(self, which: str):
         if self._capturing == which:
@@ -664,11 +675,42 @@ class Dropdown(Gtk.Window):
             b.set_sensitive(w == which)
         self._key_buttons[which].set_label("Cancel")
         self._key_values[which].set_text("Press the new keys…")
-        self._key_message("Hold the new keys together, then let go. Esc or Cancel keeps the old ones.")
-        self.app.daemon.capture_keys(lambda names, err: _idle(self._captured, which, names, err))
+        if self.app.daemon.can_capture_keys():
+            self._window_capture = False
+            self._key_message("Hold the new keys together, then let go. Esc or Cancel keeps the old ones.")
+            self.app.daemon.capture_keys(lambda names, err: _idle(self._captured, which, names, err))
+        else:  # no keyboard access: read the keys from this window
+            self._window_capture = True
+            self._key_message("Press the new keys together. Esc or Cancel keeps the old ones.")
+
+    def _capture_in_window(self, event) -> bool:
+        """Key press while capturing in this window. Returns True if handled."""
+        if event.keyval == Gdk.KEY_Escape:
+            self._captured(self._capturing, None, None)
+            return True
+        # The key as if no modifier was held (Shift+1 -> 1, not !).
+        keymap = Gdk.Keymap.get_for_display(self.get_display())
+        ok, keyval, *_ = keymap.translate_keyboard_state(event.hardware_keycode, 0, event.group)
+        name = (Gdk.keyval_name(Gdk.keyval_to_lower(keyval if ok else event.keyval)) or "").lower()
+        if name.split("_")[0] in ("control", "alt", "super", "shift", "meta", "hyper") \
+                or name.startswith(("iso_level", "iso_group")):
+            return True  # a modifier on its own: wait for the real key
+        state = event.state
+        names = {mod for mod, mask in (("ctrl", Gdk.ModifierType.CONTROL_MASK),
+                                       ("alt", Gdk.ModifierType.MOD1_MASK),
+                                       ("super", Gdk.ModifierType.SUPER_MASK | Gdk.ModifierType.MOD4_MASK),
+                                       ("shift", Gdk.ModifierType.SHIFT_MASK)) if state & mask}
+        from .hotkeys import NAMED_KEYS
+
+        if name not in NAMED_KEYS.values():
+            self._captured(self._capturing, None, "That key can't be used; try letters, numbers, arrows or F-keys.")
+        else:
+            self._captured(self._capturing, frozenset(names | {name}), None)
+        return True
 
     def _cancel_capture(self):
-        self.app.daemon.cancel_capture()
+        if not self._window_capture:
+            self.app.daemon.cancel_capture()
         self._capturing = None
         self._show_keys()
         self._key_message("Kept the old shortcut.")
@@ -768,7 +810,7 @@ class Dropdown(Gtk.Window):
         return [
             ("Record a bug by voice",
              f"Hold {key(cfg.hold_bug)}, describe what's wrong, then let go.\n\n"
-             "The mic icon in the top bar turns <b>red</b> while recording and <b>yellow</b> while "
+             "The mic icon in your panel turns <b>red</b> while recording and <b>yellow</b> while "
              "it writes the text. The note lands in the <b>Bugs</b> tab."),
             ("Save an idea",
              f"Hold {key(cfg.hold_idea)} and say the idea. The icon turns <b>blue</b>.\n\n"
@@ -786,7 +828,7 @@ class Dropdown(Gtk.Window):
             ("Fix words and find your way around",
              "Misheard a name? Edit the note and FloatNote offers to always fix that word. "
              "All fixes and hint words live in <b>⚙ Settings → Words</b>.\n\n"
-             f"Open this dropdown by double-clicking the mic icon or with {key(cfg.toggle_keys)}. "
+             f"Open this dropdown by clicking the mic icon or with {key(cfg.toggle_keys)}. "
              "Shortcuts, the copy heading and the speech model are in ⚙ Settings too."),
         ]
 
@@ -849,7 +891,7 @@ class Dropdown(Gtk.Window):
         self.expand_btn.set_image(Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.BUTTON))
         self.expand_btn.set_tooltip_text("Make smaller" if self._expanded else "Make bigger")
 
-    def open_dropdown(self, x: int | None = None, tab: str | None = None):
+    def open_dropdown(self, x: int | None = None, tab: str | None = None, y: int | None = None):
         if not self.app.settings.get("guide_seen"):
             tab = "guide"  # first time: explain how FloatNote works
         if tab in ("settings", "guide"):
@@ -858,6 +900,7 @@ class Dropdown(Gtk.Window):
         elif tab:
             self.stack.set_visible_child_name(tab)
         self._had_focus = False
+        self._click = (x, y)  # where the tray icon was clicked (None: opened by a shortcut)
         self._apply_geometry()
         self.show()
         self.refresh()
@@ -873,42 +916,58 @@ class Dropdown(Gtk.Window):
         self._hidden_at = time.monotonic()
         self.hide()
 
-    def toggle(self, x: int | None = None):
+    def toggle(self, x: int | None = None, y: int | None = None):
         # A click on the icon first takes focus away (which closes us), then
         # arrives as a toggle: don't reopen straight away in that case.
         if self.get_visible() or time.monotonic() - self._closed_by_focus_at < 0.5:
             self.close_dropdown()
         else:
-            self.open_dropdown(x)
+            self.open_dropdown(x, y=y)
 
-    @staticmethod
-    def _workarea():
+    def _target(self, size: tuple[int, int] | None = None) -> tuple[int, int]:
+        """Where the dropdown goes: next to the tray icon, on the panel's side
+        (see placement.py). Opened by a shortcut: the panel's corner."""
+        from .placement import panel_side, place, usable_click
+
         display = Gdk.Display.get_default()
-        monitor = display.get_primary_monitor() or display.get_monitor(0)
-        return monitor.get_workarea()  # starts just below the top bar
+        x, y = self._click
+        monitor = None
+        if x is not None and y is not None:
+            monitor = display.get_monitor_at_point(x, y)
+        monitor = monitor or display.get_primary_monitor() or display.get_monitor(0)
+        g, a = monitor.get_geometry(), monitor.get_workarea()
+        geometry, area = (g.x, g.y, g.width, g.height), (a.x, a.y, a.width, a.height)
+        click = usable_click(geometry, x, y)
+        if click is not None:  # opened by a shortcut later: same panel as this click
+            self._last_side = panel_side(geometry, area, click)
+        return place(geometry, area, size or self._current_size(), click, self._last_side)
+
+    def _current_size(self) -> tuple[int, int]:
+        gdk_window = self.get_window()
+        if gdk_window is not None and self.get_visible():
+            return gdk_window.get_width(), gdk_window.get_height()
+        return self._size()
 
     def _apply_geometry(self):
-        """Size the dropdown and put it flush in the top-right corner, under the top bar."""
-        area = self._workarea()
+        """Size the dropdown and put it next to the tray icon."""
         w, h = self._size()
         self.resize(w, h)
-        self.move(area.x + area.width - w, area.y)
+        self.move(*self._target((w, h)))
 
-    def _snap_right(self):
-        """After a resize lands, make sure the right edge still touches the corner."""
+    def _snap_to_anchor(self):
+        """After a resize lands, keep the dropdown against the panel (window
+        managers keep the top-left corner when a window shrinks)."""
         gdk_window = self.get_window()
         if not self.get_visible() or gdk_window is None:
             return
-        area = self._workarea()
         _, x, y = gdk_window.get_origin()  # real position (get_position() can be stale)
-        w = gdk_window.get_width()
-        target = area.x + area.width - w
-        if abs(x - target) > 1 or y != area.y:
-            gdk_window.move(target, area.y)
+        tx, ty = self._target()
+        if abs(x - tx) > 1 or abs(y - ty) > 1:
+            gdk_window.move(tx, ty)
 
     def _focus(self):
         # Take focus so clicking elsewhere closes the dropdown. Use the X server
-        # time so GNOME treats it as a response to the user's action.
+        # time so the window manager treats it as a response to the user's action.
         try:
             gi.require_version("GdkX11", "3.0")
             from gi.repository import GdkX11
@@ -922,7 +981,7 @@ class Dropdown(Gtk.Window):
         return False
 
     def _on_focus_out(self, *_):
-        # Ignore focus changes while the dropdown is still opening (the top-bar
+        # Ignore focus changes while the dropdown is still opening (the panel
         # click briefly keeps focus): only close once we really had focus.
         # X11 can also send brief focus-out/in pairs, so check a moment later.
         if self._had_focus:
@@ -936,6 +995,8 @@ class Dropdown(Gtk.Window):
         return GLib.SOURCE_REMOVE
 
     def _on_key(self, _widget, event):
+        if self._capturing is not None and self._window_capture:
+            return self._capture_in_window(event)
         if event.keyval == Gdk.KEY_Escape and self._editing is None:
             self.close_dropdown()
             return True
@@ -968,9 +1029,10 @@ class Dropdown(Gtk.Window):
             transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
             buttons=Gtk.ButtonsType.NONE, text="Turn on hold-to-record?")
         dialog.format_secondary_text(
-            "GNOME doesn't tell apps when a key is released, so FloatNote reads the keyboard directly. "
-            "That needs your user in the 'input' group (your password is asked next).\n\n"
-            "FloatNote only looks at modifier keys and never stores what you type, but any program you "
+            "Linux desktops don't tell apps when a shortcut is released, and each desktop handles "
+            "shortcuts its own way, so FloatNote reads the keyboard directly. That needs your user "
+            "in the 'input' group (your password is asked next).\n\n"
+            "FloatNote only looks at its own shortcut keys and never stores what you type, but any program you "
             "run could then read keystrokes. You can undo it any time with:\n"
             "sudo gpasswd -d $USER input")
         dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Turn on", Gtk.ResponseType.OK)
@@ -1375,11 +1437,11 @@ class App:
         try:
             from .tray import Tray
 
-            self.tray = Tray(lambda x, y: self.dropdown.toggle(x))
+            self.tray = Tray(lambda x, y: self.dropdown.toggle(x, y))
         except Exception:  # noqa: BLE001 - FloatNote still works from the shortcuts
             import logging
 
-            logging.getLogger("floatnote").exception("top-bar icon unavailable")
+            logging.getLogger("floatnote").exception("panel icon unavailable")
             self.tray = None
         daemon.ui = self
         self._update_indicators()
@@ -1429,12 +1491,13 @@ class App:
         elif state["pending"] or not state["model_ready"]:
             icon, body = "busy", "Transcribing…" if state["pending"] else state.get("model_status", "")
         else:
-            icon, body = "idle", f"{project.name}: {bugs} bug(s) waiting" if bugs else f"{project.name}: ready"
+            icon, body = "idle", f"{bugs} bug(s) waiting" if bugs else "Ready"
         self.tray.set_icon(icon)
         from .tray import bar_label
 
         self.tray.set_label(bar_label(project.name) if self.daemon.cfg.show_project_in_bar else "")
-        self.tray.set_tooltip("FloatNote", body)
+        # Some panels (KDE, XFCE) don't show the label: the tooltip always names the project.
+        self.tray.set_tooltip(f"FloatNote: {project.name}", body)
         self.tray.set_badge(bugs)
 
     def run(self):

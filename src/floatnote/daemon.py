@@ -29,17 +29,22 @@ from .store import GENERAL_ID, Note, Store, format_paste
 log = logging.getLogger("floatnote")
 
 MIN_RECORD_SECONDS = 0.5
+
+# Run as root by pkexec, user name as $1. On Fedora Silverblue/Kinoite the
+# 'input' group is only in /usr/lib/group, which usermod doesn't read: copy it
+# to /etc/group first.
+ADD_TO_INPUT_GROUP = (
+    "if ! grep -q '^input:' /etc/group && [ -f /usr/lib/group ]; then "
+    "grep '^input:' /usr/lib/group >> /etc/group; fi; "
+    'exec usermod -aG input "$1"'
+)
 KINDS = {"toggle-bug": "bug", "toggle-idea": "idea"}
 
 
 def model_is_downloaded(name: str) -> bool:
-    try:
-        from faster_whisper.utils import download_model
+    from .models import is_downloaded
 
-        download_model(name, local_files_only=True)
-        return True
-    except Exception:  # noqa: BLE001 - not cached (or faster-whisper missing)
-        return False
+    return is_downloaded(name)
 
 
 class UI(Protocol):
@@ -74,6 +79,9 @@ class Daemon:
         self.ui: UI | None = None
         self.hold_error: str | None = None  # why hold-to-record is off, if it is
         self.listener = None  # HotkeyListener, when hold-to-record is on
+        # Who handles open/close and next project: "keyboard" (our listener),
+        # "desktop" (the desktop's own shortcut settings) or None (nobody).
+        self.shortcut_method: str | None = None
         self.on_quit: Callable[[], None] = lambda: None
 
         self._lock = threading.Lock()
@@ -137,6 +145,10 @@ class Daemon:
             self.sounds.enabled = value
         config.set_values({key: value})
 
+    def can_capture_keys(self) -> bool:
+        """Can FloatNote read the keyboard (to capture any new shortcut)?"""
+        return self.listener is not None and not self.hold_error
+
     def capture_keys(self, on_done) -> None:
         """Let the user press a new key combo; on_done(names, error) from another thread."""
         if self.listener is None or self.hold_error:
@@ -152,7 +164,7 @@ class Daemon:
     def set_keys(self, which: str, combo: str) -> str | None:
         """Change one shortcut ('bug', 'idea', 'copy', 'toggle', 'next'). Returns an error or None."""
         from . import config
-        from .hotkeys import ChordTracker, parse_combo, validate_keys
+        from .hotkeys import validate_keys
 
         field = {"bug": "hold_bug", "idea": "hold_idea", "copy": "copy_keys", "toggle": "toggle_keys",
                  "next": "next_project_keys"}[which]
@@ -161,20 +173,18 @@ class Daemon:
         error = validate_keys(values["bug"], values["idea"], values["copy"], values["toggle"], values["next"])
         if error:
             return error
-        if which in ("toggle", "next"):
+        if which in ("toggle", "next") and self.shortcut_method == "desktop":
             from . import shortcuts
 
             try:
                 shortcuts.install(shortcuts.default_launcher(), values["toggle"], values["next"])
             except Exception as e:  # noqa: BLE001
-                log.exception("could not change the GNOME shortcut")
-                return f"Couldn't change the GNOME shortcut: {e}"
+                log.exception("could not change the desktop shortcut")
+                return f"Couldn't change the desktop shortcut: {e}"
         setattr(self.cfg, field, combo)
         config.set_values({field: combo})
-        if which not in ("toggle", "next") and self.listener is not None:
-            self.listener.tracker = ChordTracker(
-                {parse_combo(self.cfg.hold_bug): "bug", parse_combo(self.cfg.hold_idea): "idea"},
-                taps={parse_combo(self.cfg.copy_keys): "copy"})
+        if self.listener is not None:
+            self.listener.tracker = build_tracker(self.cfg)
         log.info("shortcut %s set to %s", which, combo)
         return None
 
@@ -208,7 +218,7 @@ class Daemon:
     def _load_model(self, gen: int) -> bool:
         """Load the configured model. Only installs it if no newer switch happened."""
         self.model_status = ("Loading speech model…" if model_is_downloaded(self.cfg.model)
-                             else f"Downloading speech model {self.cfg.model} (first time only)…")
+                             else f"Downloading speech model {self.cfg.model} (needs internet, ~1 min)…")
         self._notify()
         try:
             transcriber = self._transcriber_factory()
@@ -244,12 +254,14 @@ class Daemon:
         import shutil
         import subprocess
 
+        from .distro import input_group_hint
+
         if self.user_in_input_group():
             return True, "already allowed"
         if not shutil.which("pkexec"):
-            return False, "Run: sudo usermod -aG input $USER  (then restart FloatNote)"
+            return False, f"Run: {input_group_hint()}  (then restart FloatNote)"
         user = pwd.getpwuid(os.getuid()).pw_name
-        r = subprocess.run(["pkexec", "/usr/sbin/usermod", "-aG", "input", user],
+        r = subprocess.run(["pkexec", "/bin/sh", "-c", ADD_TO_INPUT_GROUP, "sh", user],
                            capture_output=True, text=True)
         if r.returncode != 0:
             # 126/127: the password dialog was cancelled or refused
@@ -289,7 +301,7 @@ class Daemon:
             return {"ok": True, "message": self._status_text(), "recording": self._kind,
                     "model_ready": self.model_ready.is_set(), "pending": self._pending,
                     "hold_on": self.cfg.hold_to_record and self.hold_error is None,
-                    "hold_error": self.hold_error}
+                    "hold_error": self.hold_error, "shortcut_method": self.shortcut_method}
         if cmd in KINDS:
             return self._toggle(KINDS[cmd])
         if cmd in ("start-bug", "start-idea"):
@@ -453,6 +465,11 @@ class Daemon:
             self.cancel_recording()
         elif action == ("tap", "copy"):
             self._copy_all()
+        elif action == ("key", "toggle"):
+            if self.ui is not None:
+                self.ui.toggle_panel()
+        elif action == ("key", "next"):
+            self.next_project()
 
     def _after_start(self, reply: dict, kind: str) -> None:
         if reply.get("started") and self.cfg.show_panel_on_record and self.ui is not None:
@@ -623,19 +640,32 @@ def setup_logging() -> None:
         log.addHandler(h)
 
 
+def build_tracker(cfg: Config):
+    """A ChordTracker for all of FloatNote's keyboard shortcuts. Raises ValueError
+    for a bad shortcut in the config."""
+    from .hotkeys import ChordTracker, parse_combo, parse_key_combo
+
+    combos = {parse_combo(cfg.hold_bug): "bug", parse_combo(cfg.hold_idea): "idea"}
+    taps = {parse_combo(cfg.copy_keys): "copy"} if cfg.copy_keys else {}
+    keys = {}
+    for text, name in ((cfg.toggle_keys, "toggle"), (cfg.next_project_keys, "next")):
+        if text:
+            keys[parse_key_combo(text)] = name
+    return ChordTracker(combos, taps=taps, keys=keys)
+
+
 def _start_hold_keys(cfg: Config, daemon: Daemon):
     if not cfg.hold_to_record:
         return None
-    from .hotkeys import ChordTracker, HotkeyListener, parse_combo
+    from .hotkeys import HotkeyListener
 
     try:
-        combos = {parse_combo(cfg.hold_bug): "bug", parse_combo(cfg.hold_idea): "idea"}
-        taps = {parse_combo(cfg.copy_keys): "copy"} if cfg.copy_keys else {}
+        tracker = build_tracker(cfg)
     except ValueError as e:
         daemon.hold_error = str(e)
         log.error("hold-to-record off: %s", e)
         return None
-    listener = HotkeyListener(ChordTracker(combos, taps=taps), daemon.on_hold_action)
+    listener = HotkeyListener(tracker, daemon.on_hold_action)
     listener.start()
     daemon.listener = listener
 
@@ -648,6 +678,28 @@ def _start_hold_keys(cfg: Config, daemon: Daemon):
 
     threading.Thread(target=watch_error, name="hotkeys-status", daemon=True).start()
     return listener
+
+
+def _sync_shortcuts(cfg: Config, daemon: Daemon, listener) -> None:
+    """Decide who handles open/close and next project: FloatNote itself when it
+    can read the keyboard, else the desktop's shortcut settings (see shortcuts.sync)."""
+    from . import shortcuts
+    from .env import clean_snap_env
+    from .hotkeys import keyboard_readable
+
+    keyboard = listener is not None and keyboard_readable()
+    if not keyboard:
+        daemon.shortcut_method = None  # until the desktop has them
+    clean_snap_env()  # gsettings breaks with the VS Code snap's schema dir
+    try:
+        method = shortcuts.sync(keyboard, cfg.toggle_keys, cfg.next_project_keys)
+    except Exception:  # noqa: BLE001 - FloatNote works without them
+        log.exception("could not set up the open/close and next-project shortcuts")
+        method = "keyboard" if keyboard else None
+    daemon.shortcut_method = method
+    log.info("open/close and next project: %s", {"keyboard": "read from the keyboard",
+                                                  "desktop": "desktop shortcuts"}.get(method, "no shortcut"))
+    daemon._notify()
 
 
 def _single_instance_lock():
@@ -697,13 +749,8 @@ def run(cfg: Config, login: bool = False, headless: bool = False) -> int:
 
     listener = _start_hold_keys(cfg, daemon)
     if not headless:
-        try:  # first run (e.g. installed from the .deb): set up the GNOME shortcuts once
-            from . import shortcuts
-
-            if shortcuts.ensure_installed(cfg.toggle_keys, cfg.next_project_keys):
-                log.info("keyboard shortcuts set up")
-        except Exception:  # noqa: BLE001 - FloatNote works without them
-            log.exception("could not set up keyboard shortcuts")
+        threading.Thread(target=_sync_shortcuts, args=(cfg, daemon, listener),
+                         name="shortcuts", daemon=True).start()
 
     server = _Server(str(sock), _Handler)
     sock.chmod(0o600)

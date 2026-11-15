@@ -308,8 +308,38 @@ def test_settings_api(tmp_path, monkeypatch):
     installed = []
     monkeypatch.setattr("floatnote.shortcuts.install",
                         lambda launcher, toggle, next_project: installed.append(toggle))
+    d.shortcut_method = "keyboard"  # FloatNote reads the keys: only the tracker changes
     assert d.set_keys("toggle", "ctrl+super+alt+m") is None
-    assert installed == ["ctrl+super+alt+m"] and config.load().toggle_keys == "ctrl+super+alt+m"
+    assert installed == [] and config.load().toggle_keys == "ctrl+super+alt+m"
+    assert d.listener.tracker.keys[hotkeys.parse_key_combo("ctrl+super+alt+m")] == "toggle"
+
+    d.shortcut_method = "desktop"  # the desktop handles them: update its settings too
+    assert d.set_keys("toggle", "ctrl+super+alt+j") is None
+    assert installed == ["ctrl+super+alt+j"]
+
+    def refuse(*a):
+        raise RuntimeError("taken")
+
+    monkeypatch.setattr("floatnote.shortcuts.install", refuse)
+    assert "taken" in d.set_keys("toggle", "ctrl+super+alt+k")
+    assert config.load().toggle_keys == "ctrl+super+alt+j"  # not saved
+    d.close()
+
+
+def test_key_actions_toggle_and_next_project():
+    d, notes, done = make()
+    toggled = []
+
+    class FakeUI:
+        def changed(self, *a): pass
+        def toggle_panel(self): toggled.append(1)
+
+    d.ui = FakeUI()
+    web = d.store.add_project("Web")
+    d.on_hold_action(("key", "toggle"))
+    assert toggled == [1]
+    d.on_hold_action(("key", "next"))
+    assert d.active_project_id == web
     d.close()
 
 
@@ -465,5 +495,8 @@ def test_enable_hold_keys_uses_pkexec(monkeypatch):
     monkeypatch.setattr(sp, "run", fake_run)
     ok, msg = d.enable_hold_keys()
     assert not ok and msg == "Not changed."
-    assert calls[0][:4] == ["pkexec", "/usr/sbin/usermod", "-aG", "input"]
+    assert calls[0][:3] == ["pkexec", "/bin/sh", "-c"]
+    script, user = calls[0][3], calls[0][-1]
+    assert 'usermod -aG input "$1"' in script and "/usr/lib/group" in script  # Fedora atomic too
+    assert user and user != "sh"
     d.close()

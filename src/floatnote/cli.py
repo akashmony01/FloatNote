@@ -39,6 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
     fp.add_argument("right", nargs="?", help="what you actually said")
     fp.add_argument("--remove", metavar="WRONG", help="stop correcting this word")
 
+    dm = sub.add_parser("download-models", help="download speech models now (both English models by default)")
+    dm.add_argument("names", nargs="*", help="models to download (default: small.en base.en)")
+    dm.add_argument("--dest", help="folder to put them in (default: ~/.local/share/floatnote/models)")
+    dm.add_argument("--system", action="store_true",
+                    help="put them in /usr/lib/floatnote/models for all users (packages, as root)")
     mp = sub.add_parser("model", help="show or change the speech model")
     mp.add_argument("name", nargs="?", help="model to switch to (e.g. small.en, base.en)")
     mp.add_argument("--beam", type=int, choices=[1, 5], help="beam size: 1 = faster, 5 = more accurate")
@@ -58,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     dp.add_argument("--login", action="store_true", help="started at login: show open ideas")
     dp.add_argument("--headless", action="store_true", help="no windows, hotkeys and clipboard only")
 
-    sp = sub.add_parser("setup-shortcuts", help="add FloatNote keyboard shortcuts to GNOME")
+    sp = sub.add_parser("setup-shortcuts", help="set up the open/close and next-project shortcuts")
     sp.add_argument("--remove", action="store_true", help="remove them instead")
     sp.add_argument("--launcher", help="command the shortcuts run (default: this floatnote)")
     sub.add_parser("doctor", help="check this machine has what FloatNote needs")
@@ -190,28 +195,33 @@ def _project(name: str | None) -> int:
 
 def _setup_shortcuts(remove: bool, launcher: str | None) -> int:
     import os
+    import shlex
     import shutil
-    import subprocess
 
-    from . import shortcuts
+    from . import config, shortcuts
     from .env import clean_snap_env
+    from .hotkeys import keyboard_readable, pretty_combo
 
     clean_snap_env()  # gsettings breaks with the VS Code snap's schema dir
-    try:
-        if remove:
-            print(f"Removed {shortcuts.remove()} FloatNote shortcut(s).")
-            return 0
-        import shlex
-
-        launcher = shlex.quote(launcher or os.path.abspath(shutil.which(sys.argv[0]) or sys.argv[0]))
-        print("Keyboard shortcuts (change them in Settings > Keyboard > Custom Shortcuts):")
-        from . import config
-
-        cfg = config.load()
-        for line in shortcuts.install(launcher, cfg.toggle_keys, cfg.next_project_keys):
-            print("  " + line)
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        print(f"floatnote: could not change GNOME shortcuts: {e}", file=sys.stderr)
+    if remove:
+        print(f"Removed {shortcuts.remove()} FloatNote desktop shortcut(s).")
+        return 0
+    cfg = config.load()
+    launcher = shlex.quote(launcher or os.path.abspath(shutil.which(sys.argv[0]) or sys.argv[0]))
+    keyboard = cfg.hold_to_record and keyboard_readable()
+    method = shortcuts.sync(keyboard, cfg.toggle_keys, cfg.next_project_keys, launcher)
+    keys = (f"{pretty_combo(cfg.toggle_keys)} open/close, "
+            f"{pretty_combo(cfg.next_project_keys)} next project")
+    if method == "keyboard":
+        print(f"FloatNote reads its shortcuts from the keyboard itself ({keys}); no desktop shortcuts needed.")
+    elif method == "desktop":
+        print(f"Added to your desktop's keyboard shortcuts: {keys}.")
+    else:
+        desktop = shortcuts.detect_desktop()
+        why = "see ~/.local/share/floatnote/floatnote.log" if desktop else \
+            "this desktop isn't supported (GNOME, KDE, Cinnamon or XFCE)"
+        print(f"floatnote: could not add desktop shortcuts: {why}.\n"
+              "Turn on keyboard access instead: floatnote doctor explains how.", file=sys.stderr)
         return 1
     return 0
 
@@ -295,13 +305,51 @@ def _model(name: str | None, beam: int | None) -> int:
         print(f"floatnote: unknown model {name!r}. Choose from: {', '.join(config.MODELS)}", file=sys.stderr)
         return 1
     name = name or cfg.model
-    print(f"Getting {name} (downloads once, can take a few minutes)...")
-    from faster_whisper.utils import download_model
+    from . import models
 
-    download_model(name)
+    if not models.is_downloaded(name):
+        print(f"Getting {name} (downloads once, can take a few minutes)...")
+        models.resolve(name)
     config.set_values({"model": name, **({"beam_size": beam} if beam else {})})
     print(f"Model set to {name}" + (f", beam {beam}" if beam else ""))
     _restart_if_running()
+    return 0
+
+
+def _download_models(names: list[str], dest: str | None, system: bool) -> int:
+    import os
+    from pathlib import Path
+
+    from . import config, models
+
+    names = names or models.DEFAULT_MODELS
+    unknown = [n for n in names if n not in config.MODELS]
+    if unknown:
+        print(f"floatnote: unknown model(s) {', '.join(unknown)}. Choose from: {', '.join(config.MODELS)}",
+              file=sys.stderr)
+        return 1
+    if system:
+        target = models.system_dir()
+        os.umask(0o022)  # shared with every user
+    else:
+        target = Path(dest) if dest else models.user_dir()
+    failed = []
+    for name in names:
+        # Into the default user folder, a copy anywhere FloatNote looks is enough.
+        found = target / name if models.is_complete(target / name) else \
+            (models.where(name) if not system and not dest else None)
+        if found:
+            print(f"{name}: already downloaded ({found})")
+            continue
+        print(f"Downloading speech model {name} into {target} ...", flush=True)
+        try:
+            models.download(name, target)
+        except Exception as e:  # noqa: BLE001 - offline, disk full...
+            print(f"floatnote: could not download {name}: {e}", file=sys.stderr)
+            failed.append(name)
+    if failed:
+        print("FloatNote will download the missing model(s) on first start instead.", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -343,6 +391,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "fix":
         return _fix(args.wrong, args.right, args.remove)
 
+    if args.command == "download-models":
+        return _download_models(args.names, args.dest, args.system)
     if args.command == "model":
         return _model(args.name, args.beam)
 

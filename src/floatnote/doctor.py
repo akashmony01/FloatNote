@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import sys
 
-from . import client, config, paths
+from . import client, config, distro, paths
 
 OK, WARN, FAIL = "ok", "warn", "FAIL"
 
@@ -27,7 +27,7 @@ def _check_gtk3() -> tuple[str, str]:
 
 def _check_audio() -> tuple[str, str]:
     if not ctypes.util.find_library("portaudio"):
-        return FAIL, "PortAudio missing: sudo apt install libportaudio2"
+        return FAIL, f"PortAudio missing: {distro.install_hint('portaudio')}"
     try:
         import sounddevice as sd
 
@@ -47,14 +47,16 @@ def _check_whisper() -> tuple[str, str]:
 
 
 def _check_model() -> tuple[str, str]:
-    try:
-        from faster_whisper.utils import download_model
+    from . import models
 
+    try:
         name = config.load().model
-        download_model(name, local_files_only=True)
-        return OK, f"{name} downloaded"
     except Exception:  # noqa: BLE001
-        return WARN, "not downloaded yet (happens on first start, needs internet)"
+        return WARN, "config error"
+    found = models.where(name)
+    if found:
+        return OK, f"{name} in {found}"
+    return WARN, f"{name} not downloaded yet: run  floatnote download-models  (needs internet)"
 
 
 def _check_hold_keys() -> tuple[str, str]:
@@ -86,7 +88,37 @@ def _check_hold_keys() -> tuple[str, str]:
             return OK, combos + " (FloatNote applies the 'input' group itself)"
     except KeyError:
         pass
-    return WARN, "off: run  sudo usermod -aG input $USER  then log out and back in"
+    return WARN, f"off: run  {distro.input_group_hint()}  then restart FloatNote"
+
+
+def _check_shortcuts() -> tuple[str, str]:
+    """Who handles open/close and next project (see shortcuts.sync)."""
+    from . import shortcuts
+    from .hotkeys import keyboard_readable
+
+    try:
+        method = client.send("status").get("shortcut_method", "?")
+    except Exception:  # noqa: BLE001 - daemon not running: work it out here
+        method = "keyboard" if keyboard_readable() else ("desktop" if shortcuts.installed() else None)
+    if method == "keyboard":
+        return OK, "read from the keyboard (any desktop)"
+    if method == "desktop":
+        return OK, f"registered with {shortcuts.detect_desktop() or 'the desktop'} (no keyboard access)"
+    if shortcuts.detect_desktop() is None:
+        return WARN, "none: turn on keyboard access (this desktop isn't supported for desktop shortcuts)"
+    return WARN, "none yet: start FloatNote, or run  floatnote setup-shortcuts"
+
+
+def _desktop() -> tuple[str, str]:
+    from . import shortcuts
+
+    session = os.environ.get("XDG_SESSION_TYPE", "?")
+    raw = os.environ.get("XDG_CURRENT_DESKTOP", "?")
+    desktop = shortcuts.detect_desktop()
+    if desktop is None:
+        return WARN, f"{raw} / {session} (not tested; GNOME, KDE, Cinnamon and XFCE are supported)"
+    names = {"gnome": "GNOME", "kde": "KDE Plasma", "cinnamon": "Cinnamon", "xfce": "XFCE"}
+    return OK, f"{names[desktop]} / {session}"
 
 
 def _check_clipboard() -> tuple[str, str]:
@@ -97,7 +129,7 @@ def _check_clipboard() -> tuple[str, str]:
     fallback = shutil.which("xclip") or shutil.which("wl-copy")
     if fallback:
         return WARN, f"{tool} missing, will use {os.path.basename(fallback)}"
-    return FAIL, "no clipboard tool: sudo apt install wl-clipboard xclip"
+    return FAIL, f"no clipboard tool: {distro.install_hint('clipboard')}"
 
 
 def _check_config() -> tuple[str, str]:
@@ -112,14 +144,14 @@ def run() -> int:
     snap_leak = [k for k in os.environ if k.endswith("_VSCODE_SNAP_ORIG")]
     checks = [
         ("Python", (OK, platform.python_version()) if sys.version_info >= (3, 11) else (FAIL, "need 3.11+")),
-        ("Session", (OK if os.environ.get("XDG_SESSION_TYPE") else WARN,
-                     f"{os.environ.get('XDG_SESSION_TYPE', '?')} / {os.environ.get('XDG_CURRENT_DESKTOP', '?')}")),
+        ("Desktop", _desktop()),
         ("Snap env", (WARN, "VS Code snap env detected; FloatNote will clean it") if snap_leak else (OK, "clean")),
         ("GTK3", _check_gtk3()),
         ("Audio", _check_audio()),
         ("Whisper", _check_whisper()),
         ("Model", _check_model()),
         ("Hold keys", _check_hold_keys()),
+        ("Open/close", _check_shortcuts()),
         ("Clipboard", _check_clipboard()),
         ("Config", _check_config()),
         ("Data dir", (OK, str(paths.data_dir()))),

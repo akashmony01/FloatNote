@@ -14,9 +14,12 @@ if [ "$1" = "configure" ]; then
         echo "Check your internet connection, then run: sudo dpkg --configure -a" >&2
         exit 1
     fi
+    echo "FloatNote: downloading the speech models (small.en and base.en, about 600 MB)..."
+    # Shared by every user. If it fails (offline), FloatNote downloads on first start.
+    "$APP/venv/bin/floatnote" download-models --system || true
     echo
     echo "FloatNote is installed."
-    echo "Open FloatNote from your apps: a microphone appears in the top bar."
+    echo "Open FloatNote from your apps: a microphone appears in your panel."
     echo "Double-click it for a short guide. It also starts by itself when you log in."
 fi
 

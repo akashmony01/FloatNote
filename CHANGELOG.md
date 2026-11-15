@@ -2,6 +2,27 @@
 
 All notable changes to FloatNote. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-11-16
+
+FloatNote now works on **GNOME, KDE Plasma, Cinnamon (Linux Mint) and XFCE**, and installs on Fedora, Arch and openSUSE as well as Ubuntu/Debian/Mint.
+
+### Fixed
+- **Open/close (Ctrl+Super+Alt+N) and next project (Ctrl+Super+Alt+P) didn't work outside GNOME**, and changing any shortcut in Settings failed with "Couldn't change the GNOME shortcut". They were GNOME custom shortcuts, which other desktops ignore.
+
+### Changed
+- **All shortcuts are read from the keyboard**, the same way hold-to-record already was, so they work identically on every desktop. FloatNote 1.0's GNOME shortcuts are removed automatically so nothing fires twice.
+- **Without keyboard access**, open/close and next project are registered with the desktop instead (GNOME, KDE, Cinnamon or XFCE shortcut settings). FloatNote picks the right way by itself at every start. In Settings → Keys those two can then be changed by pressing the keys in the dropdown; the hold keys wait for keyboard access.
+- **The dropdown opens next to the panel icon**, on whichever side the panel is (KDE and Mint have it at the bottom), instead of always in the top-right corner. Opened with the shortcut, it goes to the corner by the panel.
+- **Both speech models (`small.en` and `base.en`) are downloaded during installation**, so FloatNote is ready on first start and switching models is instant. Packages keep them in `/usr/lib/floatnote/models` (removed on uninstall), `install.sh` in `~/.local/share/floatnote/models`. If the download fails, FloatNote downloads on first start. New command: `floatnote download-models`.
+- The panel icon's tooltip names the active project (KDE and XFCE don't show text next to tray icons).
+- Messages, the guide, `floatnote doctor` and the README no longer assume GNOME or Ubuntu; `doctor` shows the desktop and how open/close is handled, and names install commands for your distribution.
+- The `.deb` no longer pulls in the GNOME AppIndicator extension on other desktops (it's suggested instead).
+
+### Added
+- **`.rpm` package** for Fedora and openSUSE.
+- **`install.sh` supports dnf, pacman and zypper** besides apt, and tells Fedora Silverblue/Kinoite users what to add with `rpm-ostree`.
+- "Turn on…" (keyboard access) also works on Fedora Silverblue/Kinoite, where the `input` group isn't in `/etc/group`.
+
 ## [1.0.1] - 2026-11-14
 
 ### Fixed
@@ -27,5 +48,6 @@ First public release.
 - `install.sh` as an alternative (per-user install from the source bundle); `floatnote doctor` checks the setup.
 - Privacy by default: notes stay on your computer, files are private to your user, the log never contains note text, and recordings are not kept.
 
+[1.1.0]: https://github.com/akashmony01/FloatNote/releases/tag/v1.1.0
 [1.0.1]: https://github.com/akashmony01/FloatNote/releases/tag/v1.0.1
 [1.0.0]: https://github.com/akashmony01/FloatNote/releases/tag/v1.0.0

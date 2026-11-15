@@ -27,7 +27,7 @@ keep_recordings = 0
 # Hold-to-record: hold these keys to record, let go to stop.
 # Needs your user in the "input" group (install.sh offers to do it).
 # copy_keys: press together and let go to copy all bugs.
-# toggle_keys: open/close FloatNote (a GNOME shortcut).
+# toggle_keys: open/close FloatNote; next_project_keys: switch project.
 # Easiest to change from the Settings screen (gear button).
 hold_to_record = true
 hold_bug = "ctrl+super"
@@ -40,7 +40,7 @@ next_project_keys = "ctrl+super+alt+p"
 max_record_seconds = 180
 
 sounds = true
-# Show the active project's name next to the mic in the top bar.
+# Show the active project's name next to the mic in the panel (where the panel supports it).
 show_project_in_bar = true
 show_panel_on_record = false
 home_on_login = true
