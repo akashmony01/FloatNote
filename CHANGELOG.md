@@ -5,7 +5,8 @@ All notable changes to FloatNote. The format follows [Keep a Changelog](https://
 ## [Unreleased]
 
 ### Fixed
-- **Upgrading the .rpm failed** ("Cannot install floatnote 1.1.0 … and floatnote 1.1.1"): on an upgrade the new install script runs while the old version's files are still there, and it picked up both versions' wheels. The packages now install their own version by exact name. (After a failed upgrade, `sudo dnf reinstall floatnote` finishes the install.)
+- The "install didn't finish" messages now give a reinstall command that works (with the download URL).
+- **Upgrading the .rpm failed** ("Cannot install floatnote 1.1.0 … and floatnote 1.1.1"): on an upgrade the new install script runs while the old version's files are still there, and it picked up both versions' wheels. The packages now install their own version by exact name. (After a failed upgrade, `sudo dnf reinstall https://github.com/akashmony01/FloatNote/releases/latest/download/floatnote.rpm` finishes the install; plain `dnf reinstall floatnote` can't, because the package came from a URL, not a repository.)
 
 ## [1.1.1] - 2026-11-16
 

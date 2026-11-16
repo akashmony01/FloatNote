@@ -45,7 +45,8 @@ cat > %{buildroot}%{_bindir}/floatnote <<'EOF2'
 #!/bin/sh
 APP=/usr/lib/floatnote/venv/bin/floatnote
 if [ ! -x "$APP" ]; then  # the install script couldn't finish (e.g. offline): say so, don't fail silently
-    msg="FloatNote isn't set up completely. Run: sudo dnf reinstall floatnote"
+    # Installed from a URL, so dnf has no copy of its own: reinstall from the URL.
+    msg="FloatNote isn't set up completely. Run: sudo dnf reinstall https://github.com/akashmony01/FloatNote/releases/latest/download/floatnote.rpm"
     echo "$msg" >&2
     command -v notify-send >/dev/null && notify-send -i dialog-error FloatNote "$msg"
     exit 1
@@ -96,7 +97,7 @@ PIP="$APP/venv/bin/pip install --quiet --disable-pip-version-check --no-input --
 if ! $PIP "$APP/floatnote-%{version}-py3-none-any.whl" || ! $PIP --no-deps "$FASTER_WHISPER"; then
     rm -rf "$APP/venv"
     echo "FloatNote: couldn't install its Python libraries (see the error above)." >&2
-    echo "If it was a network problem: sudo dnf reinstall floatnote" >&2
+    echo "If it was a network problem: sudo dnf reinstall https://github.com/akashmony01/FloatNote/releases/latest/download/floatnote.rpm" >&2
     echo "Otherwise please report it: https://github.com/akashmony01/FloatNote/issues" >&2
     exit 0
 fi
