@@ -953,7 +953,8 @@ class Dropdown(Gtk.Window):
              "Misheard a name? Edit the note and FloatNote offers to always fix that word. "
              "All fixes and hint words live in <b>⚙ Settings → Words</b>.\n\n"
              f"Open this dropdown by clicking the mic icon or with {key(cfg.toggle_keys)}. "
-             "Shortcuts, the copy heading and the speech model are in ⚙ Settings too."),
+             "Shortcuts, the copy heading and the speech model are in ⚙ Settings too; "
+             "⏻ restarts or quits FloatNote."),
         ]
 
     def _guide_step(self, index: int):

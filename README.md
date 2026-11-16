@@ -1,12 +1,13 @@
 # FloatNote
 
-**Hold a key, say what's broken, let go.** FloatNote turns your voice into a bug list while you test an app, then hands the whole list to Claude Code (or anything else) in one go.
+**Hold a key, say what's broken, let go.** FloatNote turns your voice into a bug list while you test an app, then hands the whole list to Claude Code (or anything else) in one go. It also keeps a spoken to-do list, and can **type by voice into any app**: hold a key, talk, and the text is on your clipboard.
 
 Everything runs on your computer: speech is transcribed locally with [faster-whisper](https://github.com/SYSTRAN/faster-whisper), nothing is sent anywhere.
 
 <p>
-  <img src="docs/screenshots/bugs.png" width="300" alt="The FloatNote dropdown with a list of bugs">
-  <img src="docs/screenshots/projects.png" width="300" alt="The Projects tab">
+  <img src="docs/screenshots/bugs.png" width="270" alt="The Bugs tab: the active project's bugs with edit, move to to-do and delete buttons under each">
+  <img src="docs/screenshots/todo.png" width="270" alt="The To-do tab: to-dos with tick boxes, one done">
+  <img src="docs/screenshots/dictation.png" width="270" alt="The Dictation tab: past dictations with the time, edit, copy and delete">
 </p>
 
 ## Why
@@ -25,6 +26,7 @@ When you build with an AI coding agent, you spend your time testing: click aroun
 - **Claude Code integration** with `floatnote list` (no setup).
 - **Word fixes**: teach it names it mishears ("whitetail" → "Wagtail"); it offers a fix when you correct a note.
 - **To-do** list, shown at login; tick items off when done.
+- **Hands-free recording** for long notes: tap the keys twice instead of holding them.
 - **Nothing is lost**: recordings wait on disk until they're text, so a crash, restart or quit never loses a note, and FloatNote restarts itself if a transcription ever gets stuck.
 - Every shortcut can be changed in Settings by just pressing the new keys.
 
@@ -87,7 +89,7 @@ Or from a clone of this repository: `./install.sh`. The script works with **apt*
 | **Ctrl+Super+Alt+N** | Open / close the FloatNote dropdown |
 | **Ctrl+Super+Alt+P** | Switch to the next project |
 
-**Hands-free:** tap the keys twice quickly to record without holding them, and tap once more to stop. Use it for long notes; some wireless keyboards report a key as released after a minute of holding.
+**Hands-free:** tap the keys twice quickly to record without holding them, and tap once more to stop; the status line says *hands-free, tap Ctrl+Super to stop*. Typing while it records doesn't stop it. Use it for long notes: some wireless keyboards report a key as released after about a minute of holding, which ends a held recording.
 
 Recording starts once you've held the keys for a quarter second. You can record the next note while the last one is still being transcribed; each waiting one shows in its tab. Pressing any other key while holding throws the recording away, so normal shortcuts never record or copy by accident.
 
@@ -119,10 +121,15 @@ The icon also shows the active project: on GNOME its name appears next to the mi
 
   ↶ **Undo** brings back the last copied or cleared batch.
 - **To-do**: one shared list; tick an item when it's done, ⧉ copies one. Shown at login when you have open ones. Switch the list off in Settings → General if you don't need it.
-- **Dictation** (off until you switch it on in Settings → General): hold **Ctrl+Alt**, talk, let go. The text is copied and a notification shows the start of it; it closes by itself after a few seconds. The tab keeps your last 100 dictations to edit, copy again or delete.
-- **Projects**: one bug list per app you test. The active project is shown under the tabs (`Client website · 3 ▾`); click it to switch. New bugs and Copy all always use the active project. In the Projects tab you can add, rename, delete (FloatNote asks whether to move the bugs to *General* or delete them) and 📁 **link a code folder**.
+- **Dictation** (off until you switch it on in Settings → General): hold **Ctrl+Alt**, talk, let go. The text is copied and a notification shows the start of it ("Copied, paste it anywhere"); it closes by itself after a few seconds, so they don't pile up. Click into any app (a chat, an email, a form) and paste. The tab keeps your last 100 dictations to edit, copy again or delete; **Clear history** empties it. Dictation never opens the dropdown, so you stay in the app you're typing in.
+- **Projects**: one bug list per app you test. On the Bugs and Projects tabs the active project is shown under the tabs (`Client website · 3 ▾`); click it to switch. To-dos and dictations aren't tied to a project. New bugs and Copy all always use the active project. In the Projects tab you can add, rename, delete (FloatNote asks whether to move the bugs to *General* or delete them) and 📁 **link a code folder**.
 
-<img src="docs/screenshots/selector.png" width="300" alt="Switching projects">
+Every note has its buttons under the text: ✎ edit (or double-click the text), ⧉ copy (to-dos and dictations), → To-do (bugs), 🗑 delete.
+
+<p>
+  <img src="docs/screenshots/selector.png" width="270" alt="Switching projects">
+  <img src="docs/screenshots/projects.png" width="270" alt="The Projects tab with linked code folders">
+</p>
 
 ### Let Claude Code read your bugs
 
@@ -150,7 +157,12 @@ So link each project to its code folder once, open Claude Code in that folder an
 - **Words**: *fix misheard words* ("whitetail → Wagtail") and *hint words* (names and tech terms Whisper should know). When you correct a word in a note, FloatNote offers to remember the fix.
 - **General**: switch the To-do list and Dictation on or off, show the project on the panel icon, start/stop sounds, show to-dos at login, show the guide.
 
-<img src="docs/screenshots/settings-keys.png" width="300" alt="Settings: Keys"> <img src="docs/screenshots/settings-words.png" width="300" alt="Settings: Words">
+<p>
+  <img src="docs/screenshots/settings-general.png" width="270" alt="Settings: General, with the To-do list and Dictation switches">
+  <img src="docs/screenshots/settings-keys.png" width="270" alt="Settings: Keys">
+  <img src="docs/screenshots/settings-speech.png" width="270" alt="Settings: Speech, with the model and the longest recording">
+  <img src="docs/screenshots/settings-words.png" width="270" alt="Settings: Words, with word fixes and hint words">
+</p>
 
 Everything is also in `~/.config/floatnote/config.toml` (restart with `floatnote quit`, then any shortcut):
 
@@ -170,7 +182,7 @@ Everything is also in `~/.config/floatnote/config.toml` (restart with `floatnote
 
 ### Commands
 
-`floatnote list | projects | project [NAME] | next-project | copy-all | undo | clear | show | home | fix | model | download-models | status | doctor | quit | daemon | bench | setup-shortcuts` (`floatnote --help` for details). Commands that need the background app start it if it isn't running.
+`floatnote list | projects | project [NAME] | next-project | toggle-bug | toggle-todo | toggle-dictation | copy-all | undo | clear | show | home | fix | model | download-models | status | doctor | quit | daemon | bench | setup-shortcuts` (`floatnote --help` for details). The `toggle-…` commands start or stop a recording, for binding to other keys or buttons. Commands that need the background app start it if it isn't running.
 
 ## Speech models
 
@@ -228,6 +240,9 @@ To remove everything after uninstalling: `rm -rf ~/.local/share/floatnote ~/.con
 - **The dropdown opens in a corner, away from the icon:** some panels don't send the click position; it then opens in the corner by your panel.
 - **"Downloading speech model…" on first start:** the install couldn't download it (no internet then); it's ~460 MB. `floatnote download-models` does it ahead of time.
 - **Microphone error:** check the input device in Settings → Sound; FloatNote uses the default one.
+- **A recording stops after about a minute although you're still holding the keys:** your keyboard reports long-held keys as released (common with 2.4 GHz wireless keyboards). Tap the keys twice for [hands-free](#use) recording instead. FloatNote's own limit is Settings → Speech → Longest recording.
+- **No "Copied" notification after dictating:** the text is still copied and in the Dictation tab. Check that notifications aren't paused (do not disturb) in your desktop.
+- **A note seems lost after a crash or restart:** it's in `~/.local/share/floatnote/queue/` and is transcribed at the next start.
 - **A word is always wrong:** add a fix in Settings → Words.
 
 ## Development
@@ -242,9 +257,9 @@ python3 -m venv --system-site-packages .venv
 .venv/bin/floatnote daemon        # run in the foreground, logs to the terminal
 ```
 
-The venv uses `--system-site-packages` so GTK comes from the system's PyGObject. `tools/screenshot.py` renders the dropdown with sample data (used for the screenshots above). Releases are built by GitHub Actions when a version tag is pushed; see [docs/releasing.md](docs/releasing.md).
+The venv uses `--system-site-packages` so GTK comes from the system's PyGObject. `tools/screenshot.py OUT_DIR VIEW` renders the dropdown with sample data in a throwaway folder (used for the screenshots above; e.g. `bugs`, `todo`, `dictation`, `settings-general`). Releases are built by GitHub Actions when a version tag is pushed; see [docs/releasing.md](docs/releasing.md).
 
-Code layout (`src/floatnote/`): `cli.py` (commands) → `client.py` (Unix socket) → `daemon.py` (recording, transcription worker, settings, projects); `ui.py` (GTK3 dropdown, run through XWayland so it can sit next to the icon; `placement.py` works out where); `tray.py` (panel icon, project badge and dock badge over D-Bus); `hotkeys.py` (all shortcuts from `/dev/input`); `shortcuts/` (desktop shortcuts when there's no keyboard access: GNOME, KDE, Cinnamon, XFCE); `store.py` (SQLite); `models.py` (where speech models live), `transcriber.py`, `recorder.py`, `clipboard.py`, `words.py` (word-fix suggestions), `distro.py` (package names per distribution), `config.py`, `doctor.py`, `bench.py`.
+Code layout (`src/floatnote/`): `cli.py` (commands) → `client.py` (Unix socket) → `daemon.py` (recording, transcription worker, settings, projects); `ui.py` (GTK3 dropdown, run through XWayland so it can sit next to the icon; `placement.py` works out where); `tray.py` (panel icon, project badge and dock badge over D-Bus); `hotkeys.py` (all shortcuts from `/dev/input`, including double-tap hands-free); `notify.py` (dictation notifications); `shortcuts/` (desktop shortcuts when there's no keyboard access: GNOME, KDE, Cinnamon, XFCE); `store.py` (SQLite); `models.py` (where speech models live), `transcriber.py`, `recorder.py`, `clipboard.py`, `words.py` (word-fix suggestions), `distro.py` (package names per distribution), `config.py`, `doctor.py`, `bench.py`.
 
 The original plan and first design are in [docs/](docs/).
 

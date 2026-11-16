@@ -2,7 +2,7 @@
 
     .venv/bin/python tools/screenshot.py OUT_DIR VIEW
 
-VIEW is one of: bugs, ideas, projects, selector, settings, settings-keys,
+VIEW is one of: bugs, todo, dictation, projects, selector, settings, settings-keys,
 settings-copy, settings-speech, settings-words, settings-general, guide, guide5, large.
 Uses a throwaway data folder, so your real notes are never touched. Used for
 checking layouts and for the README screenshots.
@@ -54,15 +54,26 @@ for text in ["The navbar overlaps the hero image on mobile.",
              "The Wagtail admin is not showing the preview in the canvas."]:
     store.add("bug", text, project_id=web)
 store.add("bug", "Login page typo in the footer.")
-store.add("idea", "Export notes as a markdown file per day.")
-store.add("idea", "Attach a screenshot to the last note.")
+store.add("todo", "Export notes as a markdown file per day.")
+store.add("todo", "Write the release notes for the new version.")
+done = store.add("todo", "Attach a screenshot to the last note.")
+store.set_done(done, True)
+for text in ["Sounds good, I'll send the case studies by Friday.",
+             "Hi team, the staging site is updated. Please test the checkout flow when you get a chance "
+             "and let me know if anything looks off.",
+             "Can we move the call to 3 pm?"]:
+    store.add("dictation", text)
 store.set_active_project(web)
 
-cfg = Config(sounds=False, keep_recordings=0,
+cfg = Config(sounds=False, keep_recordings=0, dictation_enabled=True,
              vocabulary=["Claude Code", "Tailwind", "Supabase", "API", "Wagtail"],
              replacements={"whitetail": "Wagtail", "white tail": "Wagtail"})
 daemon = Daemon(cfg, store, recorder=FakeRecorder(), transcriber_factory=FakeTranscriber)
 daemon.start()
+# Look like a normal setup with keyboard access (Settings → Keys buttons enabled),
+# without really reading the keyboard.
+daemon.listener = type("NoListener", (), {"tracker": None})()
+daemon.shortcut_method = "keyboard"
 app = App(daemon)
 if not view.startswith("guide"):
     app.settings["guide_seen"] = True
@@ -76,11 +87,16 @@ if view == "guide5":
     app.dropdown._guide_step(4)
 if view == "large":
     app.dropdown._toggle_size()
+if view == "todo":
+    app.dropdown.show_done.set_active(True)
 if view == "selector":
     GLib.timeout_add(600, lambda: app.dropdown.project_btn.set_active(True) and False)
 
 
 def snap():
+    app.dropdown.present()  # focused, so nothing is drawn greyed out
+    while Gtk.events_pending():
+        Gtk.main_iteration()
     window = app.dropdown.get_window()
     x, y = app.dropdown.get_position()
     w, h = app.dropdown.get_size()
