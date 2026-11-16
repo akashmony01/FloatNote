@@ -2,6 +2,11 @@
 
 All notable changes to FloatNote. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.1] - 2026-11-16
+
+### Fixed
+- **KDE Plasma could crash when pressing Ctrl+Super+Alt+N** (KWin 6.8, crash in its global-shortcut handling). FloatNote 1.3.0 registered its KDE shortcuts on every Quit and removed them on every start, and KWin didn't always survive that. On KDE, open/close and next project are now registered with KDE **once** and left alone (FloatNote no longer reads those two keys itself there); they're only touched again when you change them in Settings → Keys. They keep working after Quit.
+
 ## [1.3.0] - 2026-11-16
 
 ### Added
@@ -86,6 +91,7 @@ First public release.
 - `install.sh` as an alternative (per-user install from the source bundle); `floatnote doctor` checks the setup.
 - Privacy by default: notes stay on your computer, files are private to your user, the log never contains note text, and recordings are not kept.
 
+[1.3.1]: https://github.com/akashmony01/FloatNote/releases/tag/v1.3.1
 [1.3.0]: https://github.com/akashmony01/FloatNote/releases/tag/v1.3.0
 [1.2.0]: https://github.com/akashmony01/FloatNote/releases/tag/v1.2.0
 [1.1.1]: https://github.com/akashmony01/FloatNote/releases/tag/v1.1.1

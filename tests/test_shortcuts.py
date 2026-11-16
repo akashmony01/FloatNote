@@ -184,6 +184,9 @@ class FakeKGlobalAccel:
             else:
                 self.keys[args[0]] = code
                 out = f"([([{code}, 0, 0, 0],)],)"
+        elif method == "shortcutKeys":
+            code = self.keys.get(args[0])
+            out = f"([([{code}, 0, 0, 0],)],)" if code else "(@a(ai) [],)"
         elif method == "unregister":
             out = "(true,)"
         elif method == "globalShortcutsByKey":
@@ -202,9 +205,17 @@ def test_kde_install_and_remove(monkeypatch, tmp_path):
     desktop = (tmp_path / "applications" / "floatnote-show.desktop").read_text()
     assert 'Exec="/home/my user/.local/bin/floatnote" show' in desktop
     assert "NoDisplay=true" in desktop
-    assert fake.calls == ["doRegister", "setShortcutKeys"] * 2
+    assert fake.calls == ["shortcutKeys", "doRegister", "setShortcutKeys"] * 2
     assert kde.qt_key("ctrl+super+alt+n") in fake.keys.values()
     assert kde.installed()
+
+    # Installing again changes nothing: no file rewritten, nothing re-registered
+    # (each change makes KDE reload its shortcut owners; KWin 6.8 crashed on that).
+    files = {p: p.stat().st_mtime_ns for p in (tmp_path / "applications").iterdir()}
+    fake.calls.clear()
+    shortcuts.install("'/home/my user/.local/bin/floatnote'", desktop="kde")
+    assert fake.calls == ["shortcutKeys"] * 2
+    assert {p: p.stat().st_mtime_ns for p in files} == files
 
     assert kde.remove() == 2
     assert not kde.installed() and fake.calls[-1] == "unregister"
@@ -238,11 +249,21 @@ def test_kde_exec_line_quotes_for_desktop_files():
 # ---- sync: never both at once -------------------------------------------------
 
 def test_sync_with_keyboard_removes_desktop_shortcuts(monkeypatch):
+    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "GNOME")
     removed = []
     monkeypatch.setattr(shortcuts, "remove", lambda desktop=None: removed.append(desktop) or 2)
     monkeypatch.setattr(shortcuts, "install", lambda *a, **k: pytest.fail("must not install"))
     assert shortcuts.sync(True, "ctrl+super+alt+n", "ctrl+super+alt+p") == "keyboard"
     assert removed == [None]  # from every desktop
+
+
+def test_sync_on_kde_keeps_the_desktop_shortcuts_even_with_keyboard(monkeypatch):
+    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "KDE")
+    installed = []
+    monkeypatch.setattr(shortcuts, "remove", lambda desktop=None: pytest.fail("must not remove on KDE"))
+    monkeypatch.setattr(shortcuts, "install", lambda launcher, t, n, desktop: installed.append((t, n, desktop)))
+    assert shortcuts.sync(True, "ctrl+super+alt+n", "ctrl+super+alt+p", "/x") == "desktop"
+    assert installed == [("ctrl+super+alt+n", "ctrl+super+alt+p", "kde")]
 
 
 def test_sync_without_keyboard_installs_for_this_desktop(monkeypatch):

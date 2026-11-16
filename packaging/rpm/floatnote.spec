@@ -124,6 +124,9 @@ fi
 %config(noreplace) %{_sysconfdir}/xdg/autostart/floatnote.desktop
 
 %changelog
+* Mon Nov 16 2026 akashmony01 <akashmony01@users.noreply.github.com> - 1.3.1-1
+- KDE: register open/close once instead of on every quit/start (KWin crash).
+
 * Mon Nov 16 2026 akashmony01 <akashmony01@users.noreply.github.com> - 1.3.0-1
 - See CHANGELOG.md in the source: dictation, ideas renamed to to-do, no lost notes.
 

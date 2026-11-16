@@ -203,7 +203,7 @@ Installing FloatNote downloads `small.en` and `base.en`, so switching between th
 
 ## How shortcuts work
 
-With keyboard access (the `input` group), FloatNote reads **all** its shortcuts straight from the keyboard. This works the same on every desktop and doesn't touch your desktop's shortcut settings. The keys also reach the app you're in; nothing uses Ctrl+Super+Alt combinations by default.
+With keyboard access (the `input` group), FloatNote reads its shortcuts straight from the keyboard. **On KDE Plasma**, open/close and next project are the exception: they're always registered with KDE (System Settings → Shortcuts), once, and left alone, because KWin 6.8 could crash when apps add and remove shortcuts often; they then also work while FloatNote isn't running. This works the same on every desktop and doesn't touch your desktop's shortcut settings. The keys also reach the app you're in; nothing uses Ctrl+Super+Alt combinations by default.
 
 Without keyboard access, FloatNote registers **open/close** and **next project** with your desktop instead, and they show up in its shortcut settings:
 
@@ -214,7 +214,7 @@ Without keyboard access, FloatNote registers **open/close** and **next project**
 | Cinnamon | Keyboard → Shortcuts → Custom Shortcuts |
 | XFCE | Keyboard → Application Shortcuts |
 
-FloatNote switches between the two by itself every time it starts (never both, or each press would fire twice). When you **quit** FloatNote while it reads the keyboard, it hands open/close to the desktop, so Ctrl+Super+Alt+N starts it again; the next start takes the keys back. Change the keys in FloatNote's Settings → Keys, not in the desktop's settings. `floatnote setup-shortcuts` redoes this by hand; `--remove` removes the desktop shortcuts.
+FloatNote switches between the two by itself every time it starts (never both, or each press would fire twice). On GNOME, Cinnamon and XFCE, when you **quit** FloatNote while it reads the keyboard, it hands open/close to the desktop, so Ctrl+Super+Alt+N starts it again; the next start takes the keys back. On KDE the desktop has them all the time anyway. Change the keys in FloatNote's Settings → Keys, not in the desktop's settings. `floatnote setup-shortcuts` redoes this by hand; `--remove` removes the desktop shortcuts.
 
 ## Files
 

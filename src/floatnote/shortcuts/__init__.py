@@ -29,6 +29,11 @@ SHORTCUTS = [  # default keys; the real ones come from config (toggle_keys, next
 ]
 
 DESKTOPS = ("gnome", "kde", "cinnamon", "xfce")
+# Desktops where open/close and next project stay registered with the desktop
+# even when FloatNote can read the keyboard. KWin 6.8 crashed on a key press
+# after FloatNote registered and removed its shortcuts at every quit and start,
+# so on KDE they are registered once and left alone (they also work after Quit).
+KEEP_REGISTERED = ("kde",)
 
 
 class ShortcutError(Exception):
@@ -120,13 +125,14 @@ def sync(keyboard: bool, toggle: str, next_project: str, launcher: str | None = 
 
     keyboard=True: FloatNote reads the keys itself, so remove any desktop
     shortcuts (also the GNOME ones from FloatNote 1.0). Returns "keyboard".
+    Except on KEEP_REGISTERED desktops, where they stay with the desktop.
     keyboard=False: register them with the desktop. Returns "desktop", or None
     when that isn't possible (unknown desktop or it refused)."""
-    if keyboard:
+    desktop = detect_desktop()
+    if keyboard and desktop not in KEEP_REGISTERED:
         if removed := remove():
             log.info("removed %d desktop shortcut(s): FloatNote reads the keys itself now", removed)
         return "keyboard"
-    desktop = detect_desktop()
     if desktop is None:
         log.warning("no keyboard access and unknown desktop: open/close and next project have no shortcut")
         return None

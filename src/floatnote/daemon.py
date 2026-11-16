@@ -180,8 +180,13 @@ class Daemon:
             self.sounds.enabled = value
         config.set_values({key: value})
         if key.endswith("_enabled") and self.listener is not None:
-            self.listener.tracker = build_tracker(self.cfg)
+            self.listener.tracker = self._build_tracker()
         self._notify()
+
+    def _build_tracker(self):
+        """The key tracker for the current settings; without open/close and next
+        project when the desktop handles those (or each press would fire twice)."""
+        return build_tracker(self.cfg, press_keys=self.shortcut_method != "desktop")
 
     def enabled(self, kind: str) -> bool:
         """Bugs are always on; to-do and dictation can be switched off in Settings."""
@@ -225,7 +230,7 @@ class Daemon:
         setattr(self.cfg, field, combo)
         config.set_values({field: combo})
         if self.listener is not None:
-            self.listener.tracker = build_tracker(self.cfg)
+            self.listener.tracker = self._build_tracker()
         log.info("shortcut %s set to %s", which, combo)
         return None
 
@@ -832,7 +837,7 @@ def setup_logging() -> None:
         log.addHandler(h)
 
 
-def build_tracker(cfg: Config):
+def build_tracker(cfg: Config, press_keys: bool = True):
     """A ChordTracker for all of FloatNote's keyboard shortcuts. Raises ValueError
     for a bad shortcut in the config."""
     from .hotkeys import ChordTracker, parse_combo, parse_key_combo
@@ -844,7 +849,7 @@ def build_tracker(cfg: Config):
         combos[parse_combo(cfg.hold_dictation)] = "dictation"
     taps = {parse_combo(cfg.copy_keys): "copy"} if cfg.copy_keys else {}
     keys = {}
-    for text, name in ((cfg.toggle_keys, "toggle"), (cfg.next_project_keys, "next")):
+    for text, name in ((cfg.toggle_keys, "toggle"), (cfg.next_project_keys, "next")) if press_keys else ():
         if text:
             keys[parse_key_combo(text)] = name
     return ChordTracker(combos, taps=taps, keys=keys)
@@ -893,6 +898,8 @@ def _sync_shortcuts(cfg: Config, daemon: Daemon, listener) -> None:
         log.exception("could not set up the open/close and next-project shortcuts")
         method = "keyboard" if keyboard else None
     daemon.shortcut_method = method
+    if listener is not None and method == "desktop":
+        listener.tracker = daemon._build_tracker()  # the desktop has those two keys now
     log.info("open/close and next project: %s", {"keyboard": "read from the keyboard",
                                                   "desktop": "desktop shortcuts"}.get(method, "no shortcut"))
     daemon._notify()

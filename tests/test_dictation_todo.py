@@ -235,3 +235,16 @@ def test_notification_replaces_only_one_still_on_screen(monkeypatch):
     assert notify.replaces_id(now=105.0) == 0     # expired: KDE would drop a replacement
     monkeypatch.setattr(notify, "_last_id", 0)    # closed (signal received)
     assert notify.replaces_id(now=100.5) == 0
+
+
+def test_desktop_handled_keys_are_not_read_twice(tmp_path):
+    from floatnote.hotkeys import parse_key_combo
+
+    cfg = config.Config()
+    assert set(daemon_mod.build_tracker(cfg).keys.values()) == {"toggle", "next"}
+    assert daemon_mod.build_tracker(cfg, press_keys=False).keys == {}
+    d, notes, done = _daemon(tmp_path)
+    d.shortcut_method = "desktop"  # e.g. KDE: its shortcut opens FloatNote
+    assert parse_key_combo("ctrl+super+alt+n") not in d._build_tracker().keys
+    d.shortcut_method = "keyboard"
+    assert parse_key_combo("ctrl+super+alt+n") in d._build_tracker().keys

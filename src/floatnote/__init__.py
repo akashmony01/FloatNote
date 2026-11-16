@@ -10,4 +10,4 @@ import os
 # Set before anything imports numpy (this file runs first).
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
