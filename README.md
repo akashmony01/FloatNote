@@ -106,7 +106,7 @@ The icon also shows the active project: on GNOME its name appears next to the mi
 
 ### Bugs, To-do, Dictation and Projects
 
-- **Bugs**: the active project's bugs, newest first. Type a bug in the box at the top (Enter adds it, Shift+Enter for a new line). Double-click a note or press ✎ to correct it; ★ moves it to To-do. **Copy all** copies the list oldest first:
+- **Bugs**: the active project's bugs, newest first. Type a bug in the box at the top (Enter adds it, Shift+Enter for a new line). Double-click a note or press ✎ (under the note) to correct it; **→ To-do** moves it to the To-do list. **Copy all** copies the list oldest first:
 
   ```
   I tested the app and found these issues. Please fix them:
@@ -144,7 +144,7 @@ So link each project to its code folder once, open Claude Code in that folder an
 
 - **Keys**: click **Change**, hold the new keys together, let go (**Cancel** or Esc keeps the old ones). Record and copy keys are 2-3 modifier keys (Ctrl, Super, Alt, Shift); open/close and next project are modifiers plus one letter, number, arrow or F-key. Without keyboard access only open/close and next project can be changed (see [How shortcuts work](#how-shortcuts-work)).
 - **Copy**: the heading above the copied list, with a live preview. Empty means just the numbered list.
-- **Speech**: `small.en` (accurate) or `base.en` (fastest).
+- **Speech**: `small.en` (accurate) or `base.en` (fastest), and the longest recording (1-10 minutes).
 - **Words**: *fix misheard words* ("whitetail → Wagtail") and *hint words* (names and tech terms Whisper should know). When you correct a word in a note, FloatNote offers to remember the fix.
 - **General**: switch the To-do list and Dictation on or off, show the project on the panel icon, start/stop sounds, show to-dos at login, show the guide.
 

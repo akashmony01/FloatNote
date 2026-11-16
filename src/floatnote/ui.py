@@ -46,7 +46,10 @@ CSS = b"""
 .fn-status { font-size: smaller; opacity: 0.75; }
 .fn-num { opacity: 0.55; }
 .fn-date { opacity: 0.55; font-size: smaller; }
-.fn-row { padding: 4px 6px 4px 10px; }
+.fn-row { padding: 6px 6px 2px 10px; }
+.fn-actions button { min-height: 20px; min-width: 20px; padding: 1px 4px; }
+.fn-actions .fn-move { font-size: smaller; }
+.fn-rule { opacity: 0.35; margin: 0 4px; }
 .fn-pending { opacity: 0.6; font-style: italic; }
 .fn-hint { opacity: 0.6; padding: 24px; }
 .fn-section { font-weight: bold; opacity: 0.8; margin: 10px 10px 2px 10px; }
@@ -116,7 +119,8 @@ def _clear(listbox: Gtk.ListBox) -> None:
 
 
 class NoteRow(Gtk.ListBoxRow):
-    """One note: a leading widget (number or checkbox), text, and action buttons.
+    """One note: a leading widget (number, checkbox or icon), the text across the
+    full width, and under it a line of actions: [date] ───── ✎ … 🗑.
 
     Double-click the text or press the pencil to edit in a wrapping text box.
     Enter saves, Shift+Enter adds a line break, Esc cancels.
@@ -133,6 +137,8 @@ class NoteRow(Gtk.ListBoxRow):
         box.get_style_context().add_class("fn-row")
         lead.set_valign(Gtk.Align.START)
         box.pack_start(lead, False, False, 0)
+        column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.pack_start(column, True, True, 0)
 
         self.label = Gtk.Label(label=note.text, xalign=0, wrap=True, hexpand=True,
                                wrap_mode=Pango.WrapMode.WORD_CHAR, max_width_chars=1)
@@ -140,10 +146,6 @@ class NoteRow(Gtk.ListBoxRow):
             self.label.set_markup(f"<s>{GLib.markup_escape_text(note.text)}</s>")
         view = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         view.pack_start(self.label, False, False, 0)
-        if subtitle:
-            sub = Gtk.Label(label=subtitle, xalign=0)
-            sub.get_style_context().add_class("fn-date")
-            view.pack_start(sub, False, False, 0)
         clicks = Gtk.EventBox()
         clicks.add(view)
         clicks.connect("button-press-event", self._on_click)
@@ -158,14 +160,24 @@ class NoteRow(Gtk.ListBoxRow):
         self.stack = Gtk.Stack(hexpand=True, vhomogeneous=False, interpolate_size=True)
         self.stack.add_named(clicks, "view")
         self.stack.add_named(frame, "edit")
-        box.pack_start(self.stack, True, True, 0)
+        column.pack_start(self.stack, False, False, 0)
 
+        # Actions under the text, so the text gets the full width.
+        actions = Gtk.Box(spacing=0)
+        actions.get_style_context().add_class("fn-actions")
+        if subtitle:
+            sub = Gtk.Label(label=subtitle, xalign=0, valign=Gtk.Align.CENTER)
+            sub.get_style_context().add_class("fn-date")
+            actions.pack_start(sub, False, False, 0)
+        rule = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL, valign=Gtk.Align.CENTER)
+        rule.get_style_context().add_class("fn-rule")
+        actions.pack_start(rule, True, True, 0)
         self.edit_btn = _icon_button("document-edit-symbolic", "Edit", self.toggle_edit)
-        box.pack_start(self.edit_btn, False, False, 0)
-        for b in extra_buttons:
-            box.pack_start(b, False, False, 0)
-        box.pack_start(_icon_button("user-trash-symbolic", "Delete", lambda: on_delete(note)),
-                       False, False, 0)
+        for b in (self.edit_btn, *extra_buttons,
+                  _icon_button("user-trash-symbolic", "Delete", lambda: on_delete(note))):
+            b.set_valign(Gtk.Align.CENTER)
+            actions.pack_start(b, False, False, 0)
+        column.pack_start(actions, False, False, 0)
         self.add(box)
 
     @property
@@ -551,6 +563,7 @@ class Dropdown(Gtk.Window):
                 ("next", "Next project", "press")]
 
     WINDOW_KEYS = ("toggle", "next")  # can be captured without keyboard access
+    LENGTHS = (60, 180, 300, 600)    # choices for the longest recording, in seconds
 
     SETTINGS_TABS = [("keys", "Keys", "Click Change, hold the new keys together, let go."),
                      ("copy", "Copy", "The first line of what Copy all puts on the clipboard."),
@@ -644,6 +657,21 @@ class Dropdown(Gtk.Window):
             self._model_buttons[name] = b
             page.pack_start(b, False, False, 0)
 
+        length = Gtk.Label(label="Longest recording", xalign=0)
+        length.get_style_context().add_class("fn-section")
+        page.pack_start(length, False, False, 0)
+        about = Gtk.Label(label="Recording stops by itself after this. Longer notes take longer to "
+                                "turn into text (about 1 s per 10 s of speech).",
+                          xalign=0, wrap=True, max_width_chars=1, margin_start=10, margin_end=10)
+        about.get_style_context().add_class("fn-date")
+        page.pack_start(about, False, False, 0)
+        self.length_combo = Gtk.ComboBoxText(margin_start=10, margin_top=4, halign=Gtk.Align.START)
+        for seconds in self.LENGTHS:
+            self.length_combo.append(str(seconds), f"{seconds // 60} minute{'s' if seconds > 60 else ''}")
+        self.length_combo.connect("changed", lambda c: not self._loading_settings and c.get_active_id()
+                                  and self.app.daemon.set_option("max_record_seconds", int(c.get_active_id())))
+        page.pack_start(self.length_combo, False, False, 0)
+
         page = pages["general"]
         self.sounds_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
         self.sounds_switch.connect("notify::active", lambda sw, _p: not self._loading_settings
@@ -702,6 +730,9 @@ class Dropdown(Gtk.Window):
             self.bar_switch.set_active(cfg.show_project_in_bar)
             self.login_switch.set_active(cfg.home_on_login)
             self.todo_switch.set_active(cfg.todo_enabled)
+            if str(cfg.max_record_seconds) not in map(str, self.LENGTHS):  # a custom value from config.toml
+                self.length_combo.append(str(cfg.max_record_seconds), f"{cfg.max_record_seconds} seconds")
+            self.length_combo.set_active_id(str(cfg.max_record_seconds))
             self.dictation_switch.set_active(cfg.dictation_enabled)
         finally:
             self._loading_settings = False
@@ -1214,9 +1245,13 @@ class Dropdown(Gtk.Window):
         for i, note in reversed(list(enumerate(bugs, 1))):
             num = Gtk.Label(label=f"{i}.")
             num.get_style_context().add_class("fn-num")
-            to_todo = _icon_button("starred-symbolic", "Move to to-do", lambda note=note: self._to_todo(note))
+            to_todo = Gtk.Button(label="→ To-do", relief=Gtk.ReliefStyle.NONE, can_focus=False,
+                                 tooltip_text="Move this bug to the To-do list")
+            to_todo.get_style_context().add_class("fn-move")
+            to_todo.connect("clicked", lambda *_, note=note: self._to_todo(note))
             self.bug_list.add(NoteRow(note, num, on_save=self._save, on_delete=self._delete_bug,
-                                      on_edit_state=self._edit_state, extra_buttons=[to_todo]))
+                                      on_edit_state=self._edit_state,
+                                      extra_buttons=[to_todo] if self.app.daemon.cfg.todo_enabled else []))
         self.bug_list.show_all()
 
     def _fill_todos(self, todos, queue=()):

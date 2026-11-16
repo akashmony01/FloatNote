@@ -173,7 +173,7 @@ class Daemon:
         from . import config
 
         assert key in ("copy_intro", "sounds", "home_on_login", "show_project_in_bar",
-                       "todo_enabled", "dictation_enabled"), key
+                       "todo_enabled", "dictation_enabled", "max_record_seconds"), key
         setattr(self.cfg, key, value)
         if key == "sounds":
             self.sounds.enabled = value
@@ -655,7 +655,7 @@ class Daemon:
 
             try:
                 if shortcuts.detect_desktop():
-                    shortcuts.install(shortcuts.default_launcher(), self.cfg.toggle_keys)
+                    shortcuts.install(shortcuts.default_launcher(), self.cfg.toggle_keys, self.cfg.next_project_keys)
                     log.info("open/close keys handed to the desktop until FloatNote starts again")
             except Exception as e:  # noqa: BLE001 - quitting must always work
                 log.warning("could not hand open/close to the desktop: %s", e)

@@ -180,7 +180,7 @@ def test_quit_hands_open_close_to_the_desktop(tmp_path, monkeypatch):
 
     installed = []
     monkeypatch.setattr(shortcuts, "detect_desktop", lambda *a: "kde")
-    monkeypatch.setattr(shortcuts, "install", lambda launcher, toggle, *a: installed.append(toggle))
+    monkeypatch.setattr(shortcuts, "install", lambda launcher, toggle, nxt: installed.append((toggle, nxt)))
     d, notes, done = _daemon(tmp_path)
     quits = []
     d.on_quit = lambda: quits.append(1)
@@ -189,7 +189,7 @@ def test_quit_hands_open_close_to_the_desktop(tmp_path, monkeypatch):
     assert installed == [] and quits == [1]
     d.shortcut_method = "keyboard"
     d.quit()
-    assert installed == ["ctrl+super+alt+n"] and quits == [1, 1]
+    assert installed == [("ctrl+super+alt+n", "ctrl+super+alt+p")] and quits == [1, 1]
     monkeypatch.setattr(shortcuts, "install", lambda *a: 1 / 0)
     d.quit()  # a failure never blocks quitting
     assert quits == [1, 1, 1]

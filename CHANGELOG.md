@@ -11,9 +11,11 @@ All notable changes to FloatNote. The format follows [Keep a Changelog](https://
 - **After Quit, Ctrl+Super+Alt+N starts FloatNote again** (and opens the dropdown). FloatNote hands those keys to the desktop while it isn't running and takes them back when it starts.
 - Each recording that's waiting to be transcribed shows as its own row in its tab ("Transcribing…", then "Waiting…"), and the status line says how many are waiting.
 - Settings → General can switch the To-do list off (Bugs are always on).
+- **Settings → Speech → Longest recording**: 1, 3, 5 or 10 minutes (was only in the config file).
 
 ### Changed
 - **Ideas are now To-do.** The tab, the guide, Settings, messages and the readable file (`todo.md`, was `ideas.md`) all say to-do; your ideas moved over as to-dos. For scripts: `floatnote toggle-todo` (was `toggle-idea`), `floatnote list --todos` (was `--ideas`), and the `hold_idea` setting is now `hold_todo` (renamed in your config automatically).
+- **Note buttons sit under the text** (✎, copy, delete on the right, the date on the left), so the text gets the full width. The bug's ★ is now a clear **→ To-do** button.
 - Recording a dictation never pops up the dropdown, even with "show the dropdown when recording" on.
 
 ## [1.2.0] - 2026-11-16
