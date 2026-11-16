@@ -2,7 +2,7 @@
 
 All notable changes to FloatNote. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.2.0] - 2026-11-16
 
 ### Added
 - **The active project is shown on the panel icon on every desktop.** KDE, Cinnamon and XFCE can't show text next to tray icons, so there the project's initials (e.g. "CW" for *Client website*) are drawn as a small badge on the mic, in the icon's state colour. GNOME keeps the name next to the icon. Settings → General → "Show the project on the panel icon" turns it off.
@@ -65,6 +65,7 @@ First public release.
 - `install.sh` as an alternative (per-user install from the source bundle); `floatnote doctor` checks the setup.
 - Privacy by default: notes stay on your computer, files are private to your user, the log never contains note text, and recordings are not kept.
 
+[1.2.0]: https://github.com/akashmony01/FloatNote/releases/tag/v1.2.0
 [1.1.1]: https://github.com/akashmony01/FloatNote/releases/tag/v1.1.1
 [1.1.0]: https://github.com/akashmony01/FloatNote/releases/tag/v1.1.0
 [1.0.1]: https://github.com/akashmony01/FloatNote/releases/tag/v1.0.1
