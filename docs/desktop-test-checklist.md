@@ -52,7 +52,9 @@ Remove the group (`sudo gpasswd -d $USER input`), log out and in, start FloatNot
 
 - [ ] Icon colours: red while recording a bug, blue for an idea, yellow while transcribing, green after copy.
 - [ ] Hovering shows "FloatNote: <project>".
-- [ ] GNOME: the project name shows next to the icon (Settings → General switch hides it).
+- [ ] GNOME: the project name shows next to the icon. KDE, Cinnamon, XFCE: the project's initials
+      show as a badge on the mic, in the state's colour, and change when you switch project.
+      Settings → General → "Show the project on the panel icon" hides either.
 
 ## 6. Uninstall
 

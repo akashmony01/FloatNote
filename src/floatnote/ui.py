@@ -422,13 +422,13 @@ class Dropdown(Gtk.Window):
 
     def _build_bugs_page(self) -> Gtk.Widget:
         self.bug_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
-        self.bug_list.set_placeholder(_hint("No bugs yet.\nHold Ctrl+Super and describe the issue,\nlet go when you're done."))
+        self.bug_hint = _hint("")  # text names the current keys: see _update_key_hints
+        self.bug_list.set_placeholder(self.bug_hint)
         self.new_bug = MultiEntry("Type a bug and press Enter (Shift+Enter for a new line)", self._add_bug)
         self.bug_scroller = _scrolled(self.bug_list)
 
         self.copy_btn = Gtk.Button(label="Copy all")
         self.copy_btn.get_style_context().add_class("suggested-action")
-        self.copy_btn.set_tooltip_text("Copy all bugs, then clear the list (press Ctrl+Super+Alt and let go)")
         # Off the GTK thread: a hanging clipboard tool must not freeze the window.
         self.copy_btn.connect("clicked", lambda *_: threading.Thread(
             target=self.app.daemon.handle, args=({"cmd": "copy-all"},), daemon=True).start())
@@ -451,7 +451,8 @@ class Dropdown(Gtk.Window):
         self.new_idea = MultiEntry("Type an idea and press Enter (Shift+Enter for a new line)", self._add_idea)
 
         self.idea_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
-        self.idea_list.set_placeholder(_hint("No open ideas.\nHold Super+Alt and say what you want to build."))
+        self.idea_hint = _hint("")
+        self.idea_list.set_placeholder(self.idea_hint)
 
         self.show_done = Gtk.CheckButton(label="Show done")
         self.show_done.connect("toggled", lambda *_: self.refresh())
@@ -611,7 +612,7 @@ class Dropdown(Gtk.Window):
         self.login_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
         self.login_switch.connect("notify::active", lambda sw, _p: not self._loading_settings
                                   and self.app.daemon.set_option("home_on_login", sw.get_active()))
-        for label, switch in (("Project name next to the icon", self.bar_switch),
+        for label, switch in (("Show the project on the panel icon", self.bar_switch),
                               ("Start / stop sounds", self.sounds_switch),
                               ("Show ideas at login", self.login_switch)):
             row = Gtk.Box(spacing=8, margin_start=10, margin_end=10, margin_top=8)
@@ -1052,11 +1053,24 @@ class Dropdown(Gtk.Window):
         else:
             _idle(self.flash, message)
 
+    def _update_key_hints(self):
+        """Texts that name a shortcut always show the current keys, not the defaults."""
+        from .hotkeys import pretty_combo
+
+        cfg = self.app.daemon.cfg
+        self.bug_hint.set_text(f"No bugs yet.\nHold {pretty_combo(cfg.hold_bug)} and describe the issue,\n"
+                               "let go when you're done.")
+        self.idea_hint.set_text(f"No open ideas.\nHold {pretty_combo(cfg.hold_idea)} and say what you want "
+                                "to build.")
+        self.copy_btn.set_tooltip_text(f"Copy all bugs, then clear the list (press "
+                                       f"{pretty_combo(cfg.copy_keys)} and let go)")
+
     def refresh(self):
         store = self.app.store
         project = store.project(store.active_project_id())
         bugs = store.session_notes(project.id)
         open_ideas = store.ideas()
+        self._update_key_hints()
         self.copy_btn.set_label(f"Copy all ({len(bugs)})" if bugs else "Copy all")
         self.copy_btn.set_sensitive(bool(bugs))
         self.project_label.set_text(f"{project.name} · {len(bugs)}" if bugs else project.name)
@@ -1493,10 +1507,15 @@ class App:
         else:
             icon, body = "idle", f"{bugs} bug(s) waiting" if bugs else "Ready"
         self.tray.set_icon(icon)
-        from .tray import bar_label
+        from .shortcuts import detect_desktop
+        from .tray import bar_label, project_initials
 
-        self.tray.set_label(bar_label(project.name) if self.daemon.cfg.show_project_in_bar else "")
-        # Some panels (KDE, XFCE) don't show the label: the tooltip always names the project.
+        # Only GNOME shows text next to a tray icon; elsewhere the project's
+        # initials go on the icon. The tooltip always names the project.
+        show = self.daemon.cfg.show_project_in_bar
+        text_label = detect_desktop() == "gnome"
+        self.tray.set_label(bar_label(project.name) if show and text_label else "")
+        self.tray.set_initials(project_initials(project.name) if show and not text_label else "")
         self.tray.set_tooltip(f"FloatNote: {project.name}", body)
         self.tray.set_badge(bugs)
 

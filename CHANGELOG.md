@@ -4,7 +4,11 @@ All notable changes to FloatNote. The format follows [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added
+- **The active project is shown on the panel icon on every desktop.** KDE, Cinnamon and XFCE can't show text next to tray icons, so there the project's initials (e.g. "CW" for *Client website*) are drawn as a small badge on the mic, in the icon's state colour. GNOME keeps the name next to the icon. Settings → General → "Show the project on the panel icon" turns it off.
+
 ### Fixed
+- The empty Bugs and Ideas lists and the Copy all tooltip named the default keys (Ctrl+Super, Super+Alt, Ctrl+Super+Alt) even after you changed them; they now show your keys, like the guide.
 - The "install didn't finish" messages now give a reinstall command that works (with the download URL).
 - **Upgrading the .rpm failed** ("Cannot install floatnote 1.1.0 … and floatnote 1.1.1"): on an upgrade the new install script runs while the old version's files are still there, and it picked up both versions' wheels. The packages now install their own version by exact name. (After a failed upgrade, `sudo dnf reinstall https://github.com/akashmony01/FloatNote/releases/latest/download/floatnote.rpm` finishes the install; plain `dnf reinstall floatnote` can't, because the package came from a URL, not a repository.)
 

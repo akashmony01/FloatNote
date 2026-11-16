@@ -96,7 +96,7 @@ Recording starts once you've held the keys for a quarter second. Pressing any ot
 | yellow | transcribing (or loading the model) |
 | green (2 s) | bugs copied |
 
-Hovering the icon shows the active project. On GNOME its name is also shown next to the mic (turn it off in Settings → General); KDE and XFCE don't show text next to tray icons. If you pin FloatNote to the dock or task manager, its icon shows how many bugs are waiting.
+The icon also shows the active project: on GNOME its name appears next to the mic; KDE, Cinnamon and XFCE can't show text next to tray icons, so the project's initials (e.g. **CW** for *Client website*) are drawn as a small badge on the mic instead. Turn either off in Settings → General. Hovering the icon always shows the full project name. If you pin FloatNote to the dock or task manager, its icon shows how many bugs are waiting.
 
 **Click** the icon (or press Ctrl+Super+Alt+N) to open the dropdown; on Ubuntu's GNOME extension it takes a **double-click**. The dropdown opens next to the icon, on whichever side your panel is (top on GNOME, bottom on KDE and Mint by default). It closes when you click elsewhere or press Esc. At the top right: **ⓘ** opens the short guide, **⚙** Settings, **⤢** switches between a compact and a large dropdown.
 
@@ -141,7 +141,7 @@ So link each project to its code folder once, open Claude Code in that folder an
 - **Copy**: the heading above the copied list, with a live preview. Empty means just the numbered list.
 - **Speech**: `small.en` (accurate) or `base.en` (fastest).
 - **Words**: *fix misheard words* ("whitetail → Wagtail") and *hint words* (names and tech terms Whisper should know). When you correct a word in a note, FloatNote offers to remember the fix.
-- **General**: project name next to the icon, start/stop sounds, show ideas at login, show the guide.
+- **General**: show the project on the panel icon, start/stop sounds, show ideas at login, show the guide.
 
 <img src="docs/screenshots/settings-keys.png" width="300" alt="Settings: Keys"> <img src="docs/screenshots/settings-words.png" width="300" alt="Settings: Words">
 
@@ -235,7 +235,7 @@ python3 -m venv --system-site-packages .venv
 
 The venv uses `--system-site-packages` so GTK comes from the system's PyGObject. `tools/screenshot.py` renders the dropdown with sample data (used for the screenshots above). Releases are built by GitHub Actions when a version tag is pushed; see [docs/releasing.md](docs/releasing.md).
 
-Code layout (`src/floatnote/`): `cli.py` (commands) → `client.py` (Unix socket) → `daemon.py` (recording, transcription worker, settings, projects); `ui.py` (GTK3 dropdown, run through XWayland so it can sit next to the icon; `placement.py` works out where); `tray.py` (panel icon and dock badge over D-Bus); `hotkeys.py` (all shortcuts from `/dev/input`); `shortcuts/` (desktop shortcuts when there's no keyboard access: GNOME, KDE, Cinnamon, XFCE); `store.py` (SQLite); `models.py` (where speech models live), `transcriber.py`, `recorder.py`, `clipboard.py`, `words.py` (word-fix suggestions), `distro.py` (package names per distribution), `config.py`, `doctor.py`, `bench.py`.
+Code layout (`src/floatnote/`): `cli.py` (commands) → `client.py` (Unix socket) → `daemon.py` (recording, transcription worker, settings, projects); `ui.py` (GTK3 dropdown, run through XWayland so it can sit next to the icon; `placement.py` works out where); `tray.py` (panel icon, project badge and dock badge over D-Bus); `hotkeys.py` (all shortcuts from `/dev/input`); `shortcuts/` (desktop shortcuts when there's no keyboard access: GNOME, KDE, Cinnamon, XFCE); `store.py` (SQLite); `models.py` (where speech models live), `transcriber.py`, `recorder.py`, `clipboard.py`, `words.py` (word-fix suggestions), `distro.py` (package names per distribution), `config.py`, `doctor.py`, `bench.py`.
 
 The original plan and first design are in [docs/](docs/).
 

@@ -48,6 +48,14 @@ def socket_file() -> Path:
     return _private_tmp_dir() / "floatnote.sock"
 
 
+def icon_dir() -> Path:
+    """Private folder for generated panel icons (the project badge, see tray.py)."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    path = Path(runtime) / "floatnote-icons" if runtime else _private_tmp_dir() / "icons"
+    path.mkdir(mode=0o700, exist_ok=True)
+    return path
+
+
 def _private_tmp_dir() -> Path:
     """Fallback when XDG_RUNTIME_DIR is unset: a /tmp folder only we can use.
 

@@ -77,12 +77,66 @@ def bar_label(name: str, limit: int = BAR_LABEL_MAX) -> str:
     return name if len(name) <= limit else name[: limit - 1].rstrip() + "…"
 
 
+# ---- project badge on the icon ----------------------------------------------
+# Only GNOME shows text next to a tray icon (the label above). Elsewhere (KDE,
+# XFCE, Cinnamon) the project's initials are drawn into the icon itself.
+
+COLORS = {"idle": "#bdbdbd", "bug": "#ff4d4d", "idea": "#4da3ff", "busy": "#ffcc33", "ok": "#3ddc84"}
+
+
+def project_initials(name: str) -> str:
+    """1-2 letters for the badge: 'Client website' -> 'CW', 'FloatNote' -> 'FN',
+    'floatnote' -> 'Fl', 'X' -> 'X'."""
+    import re
+
+    words = re.findall(r"[^\W_]+", name)  # letters and digits, any language
+    # Split camelCase too: "FloatNote" -> ["Float", "Note"].
+    parts = [p for w in words for p in (re.findall(r"[A-Z][^A-Z]*", w) if w[:1].isupper() else [w])]
+    parts = [p for p in parts if p]
+    if len(parts) >= 2:
+        return (parts[0][0] + parts[1][0]).upper()
+    if parts:
+        word = parts[0]
+        return word[0].upper() + word[1:2].lower()
+    return ""
+
+
+def icon_svg(state: str, initials: str) -> str:
+    """The mic icon with a small badge of `initials` in the bottom-right corner,
+    in the state's colour (so red still means recording)."""
+    from xml.sax.saxutils import escape
+
+    color = COLORS[state]
+    mic = (f'<g transform="translate(-0.6,-0.4) scale(0.72)">'
+           f'<rect x="5" y="1" width="6" height="9" rx="3" fill="{color}"/>'
+           f'<path d="M3 7.5a5 5 0 0 0 10 0" fill="none" stroke="{color}" stroke-width="1.6" stroke-linecap="round"/>'
+           f'<path d="M8 12.6v2.2M5.5 15h5" fill="none" stroke="{color}" stroke-width="1.6" stroke-linecap="round"/>'
+           f'</g>')
+    size = 7.2 if len(initials) == 1 else 6.4
+    badge = (f'<rect x="5.6" y="7" width="10.4" height="9" rx="2.2" fill="{color}"/>'
+             f'<text x="10.8" y="14.1" font-family="sans-serif" font-weight="bold" font-size="{size}" '
+             f'text-anchor="middle" fill="#1a1a1a">{escape(initials)}</text>')
+    return ('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">'
+            f'{mic}{badge}</svg>\n')
+
+
+def badge_icon(folder: Path, state: str, initials: str) -> str:
+    """Write the badge icon (once) and return its icon name."""
+    name = f"floatnote-{state}-p{initials.encode().hex()}"
+    path = folder / f"{name}.svg"
+    if not path.exists():
+        path.write_text(icon_svg(state, initials))
+    return name
+
+
 class Tray:
     def __init__(self, on_activate: Callable[[int | None, int | None], None]):
         self.on_activate = on_activate
         self._icon = "idle"
         self._tooltip = ("FloatNote", "")
         self._label = ""  # text shown next to the icon (the active project)
+        self._initials = ""  # project badge drawn on the icon ("" = plain icon)
+        self._badge_dir: Path | None = None
         self._bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         node = Gio.DBusNodeInfo.new_for_xml(_SNI_XML)
         self._reg = self._bus.register_object(_SNI_PATH, node.interfaces[0],
@@ -129,8 +183,8 @@ class Tray:
             "Title": GLib.Variant("s", "FloatNote"),
             "Status": GLib.Variant("s", "Active"),
             "WindowId": GLib.Variant("i", 0),
-            "IconName": GLib.Variant("s", f"floatnote-{self._icon}"),
-            "IconThemePath": GLib.Variant("s", str(ICON_DIR)),
+            "IconName": GLib.Variant("s", self._icon_name()),
+            "IconThemePath": GLib.Variant("s", str(self._badge_dir if self._initials else ICON_DIR)),
             "AttentionIconName": GLib.Variant("s", ""),
             "OverlayIconName": GLib.Variant("s", ""),
             "ToolTip": GLib.Variant("(sa(iiay)ss)", ("", [], title, body)),
@@ -153,6 +207,30 @@ class Tray:
         assert state in ICONS, state
         if state != self._icon:
             self._icon = state
+            self._emit("NewIcon")
+
+    def _icon_name(self) -> str:
+        if self._initials:
+            try:
+                return badge_icon(self._badge_dir, self._icon, self._initials)
+            except OSError as e:
+                log.warning("project badge icon failed: %s", e)
+                self._initials = ""
+        return f"floatnote-{self._icon}"
+
+    def set_initials(self, initials: str) -> None:
+        """Draw the project's initials on the icon (for panels without text
+        labels, i.e. not GNOME); "" shows the plain icon."""
+        if initials and self._badge_dir is None:
+            from . import paths
+
+            try:
+                self._badge_dir = paths.icon_dir()
+            except OSError as e:
+                log.warning("no folder for the project badge icon: %s", e)
+                return
+        if initials != self._initials:
+            self._initials = initials
             self._emit("NewIcon")
 
     def set_label(self, text: str) -> None:
