@@ -7,6 +7,7 @@ All notable changes to FloatNote. The format follows [Keep a Changelog](https://
 ### Added
 - **The active project is shown on the panel icon on every desktop.** KDE, Cinnamon and XFCE can't show text next to tray icons, so there the project's first two letters (e.g. "CW" for *Client website*) are drawn as a small badge on the mic, in the icon's state colour. GNOME keeps the name next to the icon. The built-in General project shows the plain icon. Settings → General → "Show the project on the panel icon" turns it off.
 - **Copy button on each idea**: copies just that idea, which stays in the list.
+- **Restart and Quit** in the dropdown (the ⏻ button next to Settings), so FloatNote can be restarted without a terminal. It warns if notes are still being transcribed.
 
 ### Fixed
 - **Notes could stay at "Transcribing…" forever** (seen on Fedora 45), and every note recorded after it queued up behind it; changing the speech model didn't help. numpy's bundled math library (OpenBLAS 0.3.34) could wait forever for its own helper threads. FloatNote now runs it single-threaded; it only does tiny calculations, so transcription is just as fast.

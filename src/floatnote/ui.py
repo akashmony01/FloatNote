@@ -368,12 +368,14 @@ class Dropdown(Gtk.Window):
         self._no_tab = Gtk.RadioButton(group=group)  # active while Settings/Guide is shown
         self.help_btn = _icon_button("help-about-symbolic", "How FloatNote works", lambda: self._show_page("guide"))
         self.settings_btn = _icon_button("emblem-system-symbolic", "Settings", lambda: self._show_page("settings"))
-        for b in (self.help_btn, self.settings_btn, self.expand_btn):
+        self.power_btn = self._build_power_button()
+        for b in (self.help_btn, self.settings_btn, self.power_btn, self.expand_btn):
             b.set_valign(Gtk.Align.CENTER)
             b.get_style_context().add_class("fn-top-btn")
         top = Gtk.Box()
         top.pack_start(tabs, True, True, 0)
         top.pack_end(self.expand_btn, False, False, 4)
+        top.pack_end(self.power_btn, False, False, 0)
         top.pack_end(self.settings_btn, False, False, 0)
         top.pack_end(self.help_btn, False, False, 0)
         self.status = Gtk.Label(xalign=1, margin_end=10, ellipsize=Pango.EllipsizeMode.END,
@@ -864,6 +866,33 @@ class Dropdown(Gtk.Window):
         if name in self._tab_buttons and not self._tab_buttons[name].get_active():
             self._tab_buttons[name].set_active(True)  # tab chosen by code (e.g. at login)
         self.refresh()
+
+    def _build_power_button(self) -> Gtk.MenuButton:
+        """Restart / Quit, so a stuck FloatNote can be fixed without a terminal."""
+        button = Gtk.MenuButton(relief=Gtk.ReliefStyle.NONE, tooltip_text="Restart or quit FloatNote")
+        button.set_can_focus(False)
+        button.add(Gtk.Image.new_from_icon_name("system-shutdown-symbolic", Gtk.IconSize.BUTTON))
+        popover = Gtk.Popover()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, margin=6, spacing=2)
+        self.power_warning = Gtk.Label(xalign=0, wrap=True, max_width_chars=28, margin=4)
+        self.power_warning.get_style_context().add_class("fn-hint")
+        box.pack_start(self.power_warning, False, False, 0)
+        for label, action in (("Restart FloatNote", lambda: self.app.daemon.restart()),
+                              ("Quit FloatNote", lambda: self.app.daemon.on_quit())):
+            item = Gtk.ModelButton(text=label)
+            item.connect("clicked", lambda *_, a=action: GLib.idle_add(lambda: a() and False))
+            box.pack_start(item, False, False, 0)
+        box.show_all()
+        popover.add(box)
+
+        def on_show(*_):
+            pending = self.app.daemon.ui_state()["pending"]
+            self.power_warning.set_text(f"{pending} note(s) still transcribing will be lost." if pending else "")
+            self.power_warning.set_visible(bool(pending))
+
+        popover.connect("show", on_show)
+        button.set_popover(popover)
+        return button
 
     def _show_page(self, name: str):
         """Show Settings or the Guide; pressing the same button again goes back to Bugs."""

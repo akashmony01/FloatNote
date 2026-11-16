@@ -55,6 +55,7 @@ Remove the group (`sudo gpasswd -d $USER input`), log out and in, start FloatNot
 - [ ] GNOME: the project name shows next to the icon. KDE, Cinnamon, XFCE: the project's two letters
       show as a badge on the mic (in the state's colour) and change when you switch project.
       With General active there's no name or badge.
+- [ ] ⏻ → Restart FloatNote: the icon disappears and comes back within a few seconds. ⏻ → Quit FloatNote: it closes.
 - [ ] Ideas: the copy button on an idea copies just that idea; it stays in the list.
       Settings → General → "Show the project on the panel icon" hides either.
 
