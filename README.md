@@ -96,7 +96,7 @@ Recording starts once you've held the keys for a quarter second. Pressing any ot
 | yellow | transcribing (or loading the model) |
 | green (2 s) | bugs copied |
 
-The icon also shows the active project: on GNOME its name appears next to the mic; KDE, Cinnamon and XFCE can't show text next to tray icons, so the project's first two letters (e.g. **CW** for *Client website*) are drawn in purple right of the mic, inside the icon. Turn either off in Settings → General. Hovering the icon always shows the full project name. If you pin FloatNote to the dock or task manager, its icon shows how many bugs are waiting.
+The icon also shows the active project: on GNOME its name appears next to the mic; KDE, Cinnamon and XFCE can't show text next to tray icons, so the project's first two letters (e.g. **CW** for *Client website*) are drawn as a small badge on the mic. The built-in General project shows the plain icon. Turn either off in Settings → General. Hovering the icon always shows the full project name. If you pin FloatNote to the dock or task manager, its icon shows how many bugs are waiting.
 
 **Click** the icon (or press Ctrl+Super+Alt+N) to open the dropdown; on Ubuntu's GNOME extension it takes a **double-click**. The dropdown opens next to the icon, on whichever side your panel is (top on GNOME, bottom on KDE and Mint by default). It closes when you click elsewhere or press Esc. At the top right: **ⓘ** opens the short guide, **⚙** Settings, **⤢** switches between a compact and a large dropdown.
 

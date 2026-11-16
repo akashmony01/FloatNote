@@ -312,6 +312,8 @@ class Daemon:
             return self.cancel_recording()
         if cmd in ("copy-all", "paste-all"):  # paste-all: old name
             return self._copy_all()
+        if cmd == "copy-note":
+            return self.copy_note(req.get("id"))
         if cmd == "undo":
             n = self.store.undo_last_batch(self.active_project_id)
             msg = f"Restored {n} note(s)" if n else "Nothing to undo in this project"
@@ -409,6 +411,23 @@ class Daemon:
         self._notify(f"Copied {len(notes)} bug(s), now paste them anywhere", "copied")
         return {"ok": True, "message": f"copied {len(notes)} note(s) (undo: floatnote undo)",
                 "count": len(notes)}
+
+    def copy_note(self, note_id) -> dict:
+        """Copy one note's text (e.g. an idea) without archiving it."""
+        note = self.store.get(note_id) if isinstance(note_id, int) else None
+        if note is None:
+            return {"ok": False, "error": "no such note"}
+        try:
+            self.copy(note.text)
+        except clipboard.ClipboardError as e:
+            log.error("clipboard failed: %s", e)
+            self.sounds.play("error")
+            self._notify("Clipboard failed")
+            return {"ok": False, "error": f"clipboard failed: {e}"}
+        self.sounds.play("stop")
+        what = "idea" if note.kind == "idea" else "note"
+        self._notify(f"Copied the {what}, now paste it anywhere", "copied")
+        return {"ok": True, "message": f"copied {what}"}
 
     def _clear(self) -> dict:
         notes = self.store.session_notes(self.active_project_id)

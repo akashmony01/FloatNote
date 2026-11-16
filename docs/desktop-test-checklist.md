@@ -53,7 +53,9 @@ Remove the group (`sudo gpasswd -d $USER input`), log out and in, start FloatNot
 - [ ] Icon colours: red while recording a bug, blue for an idea, yellow while transcribing, green after copy.
 - [ ] Hovering shows "FloatNote: <project>".
 - [ ] GNOME: the project name shows next to the icon. KDE, Cinnamon, XFCE: the project's two letters
-      show in purple right of the mic (mic in the state's colour) and change when you switch project.
+      show as a badge on the mic (in the state's colour) and change when you switch project.
+      With General active there's no name or badge.
+- [ ] Ideas: the copy button on an idea copies just that idea; it stays in the list.
       Settings → General → "Show the project on the panel icon" hides either.
 
 ## 6. Uninstall

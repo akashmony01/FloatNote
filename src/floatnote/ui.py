@@ -1108,8 +1108,10 @@ class Dropdown(Gtk.Window):
         for note in sorted(ideas, key=lambda n: n.done):  # open first, newest first within
             check = Gtk.CheckButton(active=note.done, tooltip_text="Done")
             check.connect("toggled", lambda b, note=note: self._set_done(note, b.get_active()))
+            copy = _icon_button("edit-copy-symbolic", "Copy this idea", lambda note=note: self._copy_note(note))
             self.idea_list.add(NoteRow(note, check, on_save=self._save, on_delete=self._delete_idea,
-                                       on_edit_state=self._edit_state, subtitle=note.created_at[:10]))
+                                       on_edit_state=self._edit_state, subtitle=note.created_at[:10],
+                                       extra_buttons=[copy]))
         self.idea_list.show_all()
 
     def _fill_words(self):
@@ -1130,6 +1132,11 @@ class Dropdown(Gtk.Window):
         self.app.store.update_text(note.id, text)
         self._offer_fix(note.text, text)
         _idle(self.refresh)
+
+    def _copy_note(self, note):
+        # Off the GTK thread: a hanging clipboard tool must not freeze the window.
+        threading.Thread(target=self.app.daemon.handle, args=({"cmd": "copy-note", "id": note.id},),
+                         daemon=True).start()
 
     def _delete_bug(self, note):
         self.app.store.delete(note.id)
@@ -1508,11 +1515,13 @@ class App:
             icon, body = "idle", f"{bugs} bug(s) waiting" if bugs else "Ready"
         self.tray.set_icon(icon)
         from .shortcuts import detect_desktop
+        from .store import GENERAL_ID
         from .tray import bar_label, project_initials
 
         # Only GNOME shows text next to a tray icon; elsewhere the project's
-        # initials go on the icon. The tooltip always names the project.
-        show = self.daemon.cfg.show_project_in_bar
+        # initials go on the icon. The built-in General project shows neither
+        # (the plain icon means General). The tooltip always names the project.
+        show = self.daemon.cfg.show_project_in_bar and project.id != GENERAL_ID
         text_label = detect_desktop() == "gnome"
         self.tray.set_label(bar_label(project.name) if show and text_label else "")
         self.tray.set_initials(project_initials(project.name) if show and not text_label else "")

@@ -228,6 +228,17 @@ def test_clear_archives_without_copying():
     d.close()
 
 
+def test_copy_note_copies_one_idea_without_archiving():
+    d, notes, done = make()
+    idea_id = d.store.add("idea", "Dark mode for the dropdown")
+    assert d.handle({"cmd": "copy-note", "id": idea_id})["ok"]
+    assert d.copied == ["Dark mode for the dropdown"]
+    assert [n.text for n in d.store.ideas()] == ["Dark mode for the dropdown"]  # still there
+    assert not d.handle({"cmd": "copy-note", "id": 999})["ok"]
+    assert not d.handle({"cmd": "copy-note", "id": "1"})["ok"]
+    d.close()
+
+
 def test_keeps_only_recent_recordings(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     d, notes, done = make(keep_recordings=2)

@@ -5,7 +5,8 @@ All notable changes to FloatNote. The format follows [Keep a Changelog](https://
 ## [1.2.0] - 2026-11-16
 
 ### Added
-- **The active project is shown on the panel icon on every desktop.** KDE, Cinnamon and XFCE can't show text next to tray icons, so there the project's first two letters (e.g. "CW" for *Client website*) are drawn in purple next to a slimmer mic inside the icon; the mic keeps its state colours. GNOME keeps the name next to the icon. Settings → General → "Show the project on the panel icon" turns it off.
+- **The active project is shown on the panel icon on every desktop.** KDE, Cinnamon and XFCE can't show text next to tray icons, so there the project's first two letters (e.g. "CW" for *Client website*) are drawn as a small badge on the mic, in the icon's state colour. GNOME keeps the name next to the icon. The built-in General project shows the plain icon. Settings → General → "Show the project on the panel icon" turns it off.
+- **Copy button on each idea**: copies just that idea, which stays in the list.
 
 ### Fixed
 - The empty Bugs and Ideas lists and the Copy all tooltip named the default keys (Ctrl+Super, Super+Alt, Ctrl+Super+Alt) even after you changed them; they now show your keys, like the guide.
