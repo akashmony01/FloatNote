@@ -224,3 +224,14 @@ def test_hands_free_recording_state_and_unlock(tmp_path):
     d.on_hold_action(("start", "dictation", "hands-free"))  # dictation is off: never started
     assert unlocked == [1, 1] and d.ui_state()["recording"] is None
     d.close()
+
+
+def test_notification_replaces_only_one_still_on_screen(monkeypatch):
+    from floatnote import notify
+
+    monkeypatch.setattr(notify, "_last_id", 7)
+    monkeypatch.setattr(notify, "_last_at", 100.0)
+    assert notify.replaces_id(now=101.0) == 7     # still showing: replace it
+    assert notify.replaces_id(now=105.0) == 0     # expired: KDE would drop a replacement
+    monkeypatch.setattr(notify, "_last_id", 0)    # closed (signal received)
+    assert notify.replaces_id(now=100.5) == 0

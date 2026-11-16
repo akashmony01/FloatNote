@@ -434,6 +434,7 @@ class Dropdown(Gtk.Window):
         self.suggest_bar.hide()  # shown when there's a fix to offer
         self.perm_bar.hide()     # shown when hold-to-record lacks permission
         self.apply_features()    # hide the To-do / Dictation tabs when switched off
+        self.project_btn.set_visible(self.stack.get_visible_child_name() in self.PROJECT_TABS)
         self._sync_expand_button()
 
     # ---- pages ------------------------------------------------------------
@@ -979,8 +980,11 @@ class Dropdown(Gtk.Window):
 
     # ---- open / close -----------------------------------------------------
 
+    PROJECT_TABS = ("bugs", "projects")  # to-dos and dictations don't belong to a project
+
     def _on_tab_changed(self):
         name = self.stack.get_visible_child_name()
+        self.project_btn.set_visible(name in self.PROJECT_TABS)
         if self._capturing is not None and name != "settings":
             self._cancel_capture()
         if name in self._tab_buttons and not self._tab_buttons[name].get_active():

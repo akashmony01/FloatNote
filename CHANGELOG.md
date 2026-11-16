@@ -17,6 +17,7 @@ All notable changes to FloatNote. The format follows [Keep a Changelog](https://
 ### Changed
 - **Ideas are now To-do.** The tab, the guide, Settings, messages and the readable file (`todo.md`, was `ideas.md`) all say to-do; your ideas moved over as to-dos. For scripts: `floatnote toggle-todo` (was `toggle-idea`), `floatnote list --todos` (was `--ideas`), and the `hold_idea` setting is now `hold_todo` (renamed in your config automatically).
 - **Note buttons sit under the text** (✎, copy, delete on the right, the date on the left), so the text gets the full width. The bug's ★ is now a clear **→ To-do** button.
+- The project switch only shows on the Bugs and Projects tabs (to-dos and dictations don't belong to a project).
 - Recording a dictation never pops up the dropdown, even with "show the dropdown when recording" on.
 
 ## [1.2.0] - 2026-11-16
