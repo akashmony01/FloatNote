@@ -9,6 +9,7 @@ All notable changes to FloatNote. The format follows [Keep a Changelog](https://
 - **Copy button on each idea**: copies just that idea, which stays in the list.
 
 ### Fixed
+- **Notes could stay at "Transcribing…" forever** (seen on Fedora 45), and every note recorded after it queued up behind it; changing the speech model didn't help. numpy's bundled math library (OpenBLAS 0.3.34) could wait forever for its own helper threads. FloatNote now runs it single-threaded; it only does tiny calculations, so transcription is just as fast.
 - The empty Bugs and Ideas lists and the Copy all tooltip named the default keys (Ctrl+Super, Super+Alt, Ctrl+Super+Alt) even after you changed them; they now show your keys, like the guide.
 - The "install didn't finish" messages now give a reinstall command that works (with the download URL).
 - **Upgrading the .rpm failed** ("Cannot install floatnote 1.1.0 … and floatnote 1.1.1"): on an upgrade the new install script runs while the old version's files are still there, and it picked up both versions' wheels. The packages now install their own version by exact name. (After a failed upgrade, `sudo dnf reinstall https://github.com/akashmony01/FloatNote/releases/latest/download/floatnote.rpm` finishes the install; plain `dnf reinstall floatnote` can't, because the package came from a URL, not a repository.)

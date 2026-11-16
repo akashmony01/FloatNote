@@ -69,3 +69,21 @@ def test_silence_filter_only_with_onnxruntime(monkeypatch, tmp_path, vad):
     audio, kw = t._model.calls[0]
     assert isinstance(audio, np.ndarray) and kw["vad_filter"] is vad
     assert result.text == "hello" and result.audio_seconds == 0.5
+
+
+def test_numpy_blas_is_single_threaded():
+    """numpy's own OpenBLAS thread pool could hang a transcription forever
+    (OpenBLAS 0.3.34 next to ctranslate2's OpenMP); importing floatnote turns it off."""
+    import os
+    import subprocess
+    import sys
+
+    env = {k: v for k, v in os.environ.items() if k != "OPENBLAS_NUM_THREADS"}
+    code = ("import floatnote, numpy\n"  # floatnote first, like `python -m floatnote`
+            "import ctypes, glob, os\n"
+            "libs = glob.glob(os.path.join(os.path.dirname(numpy.__file__), '..', 'numpy.libs', '*openblas*'))\n"
+            "f = [n for n in ('scipy_openblas_get_num_threads64_', 'openblas_get_num_threads') "
+            "if libs and hasattr(ctypes.CDLL(libs[0]), n)]\n"
+            "print(getattr(ctypes.CDLL(libs[0]), f[0])() if f else os.environ['OPENBLAS_NUM_THREADS'])")
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "1"
