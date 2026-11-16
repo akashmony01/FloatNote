@@ -665,12 +665,22 @@ class Dropdown(Gtk.Window):
                           xalign=0, wrap=True, max_width_chars=1, margin_start=10, margin_end=10)
         about.get_style_context().add_class("fn-date")
         page.pack_start(about, False, False, 0)
-        self.length_combo = Gtk.ComboBoxText(margin_start=10, margin_top=4, halign=Gtk.Align.START)
+        # Radio buttons, not a combo box: a combo's list is a separate window,
+        # and the dropdown closes as soon as another window takes the focus.
+        lengths = Gtk.Box(spacing=12, margin_start=8, margin_top=4)
+        self._length_buttons: dict[int, Gtk.RadioButton] = {}
+        group = None
         for seconds in self.LENGTHS:
-            self.length_combo.append(str(seconds), f"{seconds // 60} minute{'s' if seconds > 60 else ''}")
-        self.length_combo.connect("changed", lambda c: not self._loading_settings and c.get_active_id()
-                                  and self.app.daemon.set_option("max_record_seconds", int(c.get_active_id())))
-        page.pack_start(self.length_combo, False, False, 0)
+            b = Gtk.RadioButton(group=group, label=f"{seconds // 60} min")
+            b.connect("toggled", lambda btn, s=seconds: btn.get_active() and not self._loading_settings
+                      and self.app.daemon.set_option("max_record_seconds", s))
+            group = group or b
+            self._length_buttons[seconds] = b
+            lengths.pack_start(b, False, False, 0)
+        page.pack_start(lengths, False, False, 0)
+        self.length_custom = Gtk.Label(xalign=0, margin_start=10, wrap=True, max_width_chars=1)
+        self.length_custom.get_style_context().add_class("fn-date")
+        page.pack_start(self.length_custom, False, False, 0)
 
         page = pages["general"]
         self.sounds_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
@@ -730,9 +740,12 @@ class Dropdown(Gtk.Window):
             self.bar_switch.set_active(cfg.show_project_in_bar)
             self.login_switch.set_active(cfg.home_on_login)
             self.todo_switch.set_active(cfg.todo_enabled)
-            if str(cfg.max_record_seconds) not in map(str, self.LENGTHS):  # a custom value from config.toml
-                self.length_combo.append(str(cfg.max_record_seconds), f"{cfg.max_record_seconds} seconds")
-            self.length_combo.set_active_id(str(cfg.max_record_seconds))
+            button = self._length_buttons.get(cfg.max_record_seconds)
+            if button:
+                button.set_active(True)
+            # Another value set in config.toml: say so (picking a button replaces it).
+            self.length_custom.set_text("" if button else f"Now {cfg.max_record_seconds} seconds (set in config.toml).")
+            self.length_custom.set_visible(not button)
             self.dictation_switch.set_active(cfg.dictation_enabled)
         finally:
             self._loading_settings = False
