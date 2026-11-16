@@ -43,7 +43,14 @@ install -m 644 %{SOURCE0} %{buildroot}/usr/lib/floatnote/
 
 cat > %{buildroot}%{_bindir}/floatnote <<'EOF2'
 #!/bin/sh
-exec /usr/lib/floatnote/venv/bin/floatnote "$@"
+APP=/usr/lib/floatnote/venv/bin/floatnote
+if [ ! -x "$APP" ]; then  # the install script couldn't finish (e.g. offline): say so, don't fail silently
+    msg="FloatNote isn't set up completely. Run: sudo dnf reinstall floatnote"
+    echo "$msg" >&2
+    command -v notify-send >/dev/null && notify-send -i dialog-error FloatNote "$msg"
+    exit 1
+fi
+exec "$APP" "$@"
 EOF2
 chmod 755 %{buildroot}%{_bindir}/floatnote
 
@@ -79,10 +86,16 @@ echo "FloatNote: installing its Python libraries (about 250 MB to download)..."
 rm -rf "$APP/venv"
 # --system-site-packages: GTK comes from the system's python3-gobject.
 python3 -m venv --system-site-packages "$APP/venv"
-if ! "$APP/venv/bin/pip" install --quiet --disable-pip-version-check --no-input "$APP"/floatnote-*.whl; then
+# --only-binary: ready-made wheels only, never compile anything here.
+# faster-whisper --no-deps: its onnxruntime isn't built for every Python yet
+# (e.g. Fedora 45's 3.15; see pyproject.toml); a no-op where it's installed.
+FASTER_WHISPER="faster-whisper>=1.1,<2"  # same range as pyproject.toml
+PIP="$APP/venv/bin/pip install --quiet --disable-pip-version-check --no-input --only-binary=:all:"
+if ! $PIP "$APP"/floatnote-*.whl || ! $PIP --no-deps "$FASTER_WHISPER"; then
     rm -rf "$APP/venv"
-    echo "FloatNote: couldn't download its Python libraries." >&2
-    echo "Check your internet connection, then reinstall the package." >&2
+    echo "FloatNote: couldn't install its Python libraries (see the error above)." >&2
+    echo "If it was a network problem: sudo dnf reinstall floatnote" >&2
+    echo "Otherwise please report it: https://github.com/akashmony01/FloatNote/issues" >&2
     exit 0
 fi
 echo "FloatNote: downloading the speech models (small.en and base.en, about 600 MB)..."

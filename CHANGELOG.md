@@ -2,6 +2,13 @@
 
 All notable changes to FloatNote. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] - 2026-11-16
+
+### Fixed
+- **Installing failed on Fedora 45** (Python 3.15): the package tried to compile PyAV and gave up, leaving FloatNote in the app menu but unable to start. PyAV is no longer held back to an old version (FloatNote now reads its own recordings, so any version works), and onnxruntime, which has no Python 3.15 build yet, is no longer required. Without it, faster-whisper's silence filter is simply off; `floatnote doctor` says so.
+- Installing never compiles anything any more: the packages only use ready-made Python wheels, so a missing build tool can't break an install halfway.
+- If an install couldn't finish, opening FloatNote now shows a notification saying how to fix it, instead of doing nothing. The install error no longer blames your internet connection when the network was fine.
+
 ## [1.1.0] - 2026-11-16
 
 FloatNote now works on **GNOME, KDE Plasma, Cinnamon (Linux Mint) and XFCE**, and installs on Fedora, Arch and openSUSE as well as Ubuntu/Debian/Mint.
@@ -48,6 +55,7 @@ First public release.
 - `install.sh` as an alternative (per-user install from the source bundle); `floatnote doctor` checks the setup.
 - Privacy by default: notes stay on your computer, files are private to your user, the log never contains note text, and recordings are not kept.
 
+[1.1.1]: https://github.com/akashmony01/FloatNote/releases/tag/v1.1.1
 [1.1.0]: https://github.com/akashmony01/FloatNote/releases/tag/v1.1.0
 [1.0.1]: https://github.com/akashmony01/FloatNote/releases/tag/v1.0.1
 [1.0.0]: https://github.com/akashmony01/FloatNote/releases/tag/v1.0.0

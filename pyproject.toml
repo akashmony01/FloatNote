@@ -22,8 +22,17 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 dependencies = [
-    "faster-whisper>=1.1,<2",
-    "av<17",  # PyAV 17+ dropped an argument faster-whisper 1.2 still passes
+    # faster-whisper also requires onnxruntime (only for its optional silence
+    # filter), which isn't built for Python 3.15 yet. There the installers add
+    # faster-whisper with `pip install --no-deps`, and its other requirements
+    # come from this list. Keep the range in sync with FASTER_WHISPER in
+    # install.sh, packaging/debian/postinst and packaging/rpm/floatnote.spec.
+    "faster-whisper>=1.1,<2; python_version < '3.15'",
+    "ctranslate2>=4,<5",
+    "tokenizers>=0.13,<1",
+    "huggingface-hub>=0.21",
+    "tqdm",
+    "av>=11",  # never decodes files (see transcriber.read_wav), so any version works
     "sounddevice>=0.5,<1",
     "numpy>=1.26,<3",
 ]

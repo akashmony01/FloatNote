@@ -228,6 +228,7 @@ To remove everything after uninstalling: `rm -rf ~/.local/share/floatnote ~/.con
 # Fedora:        sudo dnf install python3-gobject gtk3 portaudio
 python3 -m venv --system-site-packages .venv
 .venv/bin/pip install -e '.[dev]'
+.venv/bin/pip install --no-deps 'faster-whisper>=1.1,<2'   # needed on Python 3.15+ (see pyproject.toml)
 .venv/bin/pytest
 .venv/bin/floatnote daemon        # run in the foreground, logs to the terminal
 ```

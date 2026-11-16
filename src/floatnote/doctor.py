@@ -41,7 +41,11 @@ def _check_whisper() -> tuple[str, str]:
     try:
         import faster_whisper
 
-        return OK, f"faster-whisper {faster_whisper.__version__}"
+        from .transcriber import has_vad
+
+        vad = "" if has_vad() else (f" (silence filter off: onnxruntime isn't available for "
+                                    f"Python {platform.python_version()} yet)")
+        return OK, f"faster-whisper {faster_whisper.__version__}{vad}"
     except Exception as e:  # noqa: BLE001
         return FAIL, f"faster-whisper not importable: {e}"
 

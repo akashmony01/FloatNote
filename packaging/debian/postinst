@@ -2,16 +2,22 @@
 set -e
 
 APP=/usr/lib/floatnote
+FASTER_WHISPER="faster-whisper>=1.1,<2"  # same range as pyproject.toml
+PIP="$APP/venv/bin/pip install --quiet --disable-pip-version-check --no-input --only-binary=:all:"
 
 if [ "$1" = "configure" ]; then
     echo "FloatNote: installing its Python libraries (about 250 MB to download)..."
     rm -rf "$APP/venv"
-    # --system-site-packages: GTK comes from Ubuntu's python3-gi package.
+    # --system-site-packages: GTK comes from the system's python3-gi package.
     python3 -m venv --system-site-packages "$APP/venv"
-    if ! "$APP/venv/bin/pip" install --quiet --disable-pip-version-check --no-input "$APP"/floatnote-*.whl; then
+    # --only-binary: ready-made wheels only, never compile anything here.
+    # faster-whisper --no-deps: its onnxruntime isn't built for every Python
+    # (see pyproject.toml); a no-op where it's already installed.
+    if ! $PIP "$APP"/floatnote-*.whl || ! $PIP --no-deps "$FASTER_WHISPER"; then
         rm -rf "$APP/venv"
-        echo "FloatNote: couldn't download its Python libraries." >&2
-        echo "Check your internet connection, then run: sudo dpkg --configure -a" >&2
+        echo "FloatNote: couldn't install its Python libraries (see the error above)." >&2
+        echo "If it was a network problem, run: sudo dpkg --configure -a" >&2
+        echo "Otherwise please report it: https://github.com/akashmony01/FloatNote/issues" >&2
         exit 1
     fi
     echo "FloatNote: downloading the speech models (small.en and base.en, about 600 MB)..."

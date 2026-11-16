@@ -87,7 +87,12 @@ say "Installing FloatNote into $VENV"
 mkdir -p "$DATA" "$BIN"
 [ -d "$VENV" ] || python3 -m venv --system-site-packages "$VENV"
 "$VENV/bin/pip" install --quiet --upgrade pip
-"$VENV/bin/pip" install --quiet "$SRC"
+# --prefer-binary: ready-made wheels over compiling. faster-whisper --no-deps:
+# its onnxruntime isn't built for every Python yet (e.g. Fedora 45's 3.15; see
+# pyproject.toml); a no-op where it's already installed.
+FASTER_WHISPER="faster-whisper>=1.1,<2"  # same range as pyproject.toml
+"$VENV/bin/pip" install --quiet --prefer-binary "$SRC"
+"$VENV/bin/pip" install --quiet --prefer-binary --no-deps "$FASTER_WHISPER"
 
 cat > "$LAUNCHER" <<EOF
 #!/bin/sh

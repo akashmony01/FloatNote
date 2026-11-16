@@ -23,7 +23,14 @@ install -m 644 "$WHEEL" "$ROOT/usr/lib/floatnote/"
 
 cat > "$ROOT/usr/bin/floatnote" <<'EOF'
 #!/bin/sh
-exec /usr/lib/floatnote/venv/bin/floatnote "$@"
+APP=/usr/lib/floatnote/venv/bin/floatnote
+if [ ! -x "$APP" ]; then  # postinst couldn't finish (e.g. offline): say so instead of failing silently
+    msg="FloatNote isn't set up completely. Run: sudo dpkg --configure -a"
+    echo "$msg" >&2
+    command -v notify-send >/dev/null && notify-send -i dialog-error FloatNote "$msg"
+    exit 1
+fi
+exec "$APP" "$@"
 EOF
 chmod 755 "$ROOT/usr/bin/floatnote"
 
