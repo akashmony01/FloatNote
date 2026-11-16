@@ -18,6 +18,7 @@ fine; a live session needs `./install.sh`. Note the result next to each line, pl
 `floatnote doctor` → "Open/close: read from the keyboard".
 
 - [ ] Hold Ctrl+Super, talk, let go: a bug appears. Hold Super+Alt: a to-do.
+- [ ] Tap Ctrl+Super twice quickly: recording starts hands-free (status: "hands-free, tap Ctrl+Super to stop"); typing doesn't stop it; tapping Ctrl+Super once stops it and the bug appears.
 - [ ] Record a second bug while the first still says "Transcribing…": both show as rows ("Transcribing…", "Waiting…") and both become notes.
 - [ ] Press Ctrl+Super+Alt, let go: bugs copied (icon flashes green).
 - [ ] **Ctrl+Super+Alt+N** opens the dropdown; again closes it. It does *not* copy the bugs.

@@ -379,3 +379,82 @@ def test_arrow_in_hold_combo_and_key_shortcut():
     press(t, SUPER, 1.0)
     press(t, LEFT, 1.0)
     assert t.poll(1.3) == [("start", "bug")]
+
+
+# ---- double-tap: hands-free recording ------------------------------------
+
+def _tap(t, now, keys=(CTRL, SUPER)):
+    """Press and let go of a combo quickly; returns all actions."""
+    out = []
+    for i, k in enumerate(keys):
+        out += press(t, k, now + 0.01 * i)
+    for i, k in enumerate(reversed(keys)):
+        out += release(t, k, now + 0.08 + 0.01 * i)
+    return out + t.poll(now + 0.12)
+
+
+def test_double_tap_records_hands_free_until_tapped_again():
+    t = tracker()
+    assert _tap(t, 0.0) == []                      # one short press: nothing
+    assert press(t, CTRL, 0.3) == []
+    assert press(t, SUPER, 0.31) == [("start", "bug", "hands-free")]
+    assert t.hands_free
+    assert release(t, SUPER, 0.4) == [] and release(t, CTRL, 0.41) == []  # let go: keeps going
+    assert press(t, A, 5.0) == [] and release(t, A, 5.1) == []           # typing is ignored
+    assert t.poll(20.0) == []
+    assert press(t, CTRL, 70.0) == []
+    assert press(t, SUPER, 70.01) == [("stop",)]
+    assert not t.hands_free
+    assert release(t, SUPER, 70.3) == [] and release(t, CTRL, 70.31) == []
+    assert t.poll(71.0) == []                      # letting go doesn't start a new note
+
+
+def test_keyboard_letting_go_after_61_seconds_doesnt_stop_hands_free():
+    t = tracker()
+    _tap(t, 0.0)
+    press(t, CTRL, 0.3)
+    assert press(t, SUPER, 0.31)[0][0] == "start"
+    # Holding on: the wireless keyboard reports the keys released after 61 s.
+    assert release(t, SUPER, 61.3) == [] and release(t, CTRL, 61.3) == []
+    assert t.hands_free
+
+
+def test_slow_second_press_is_a_normal_hold():
+    t = tracker()
+    _tap(t, 0.0)
+    press(t, CTRL, 1.0)
+    assert press(t, SUPER, 1.01) == []             # too late for a double-tap
+    assert t.poll(1.3) == [("start", "bug")]
+    assert release(t, SUPER, 3.0) == [("stop",)]
+
+
+def test_double_tap_of_another_combo_doesnt_count():
+    t = tracker()
+    _tap(t, 0.0)                                   # Ctrl+Super
+    press(t, SUPER, 0.3)
+    assert press(t, ALT, 0.31) == []               # Super+Alt right after: a normal hold
+    assert t.poll(0.6) == [("start", "idea")]
+
+
+def test_held_note_is_not_a_short_press():
+    t = tracker()
+    press(t, CTRL, 0.0)
+    press(t, SUPER, 0.01)
+    assert t.poll(0.3) == [("start", "bug")]
+    assert release(t, SUPER, 1.0) == [("stop",)]
+    release(t, CTRL, 1.01)
+    press(t, CTRL, 1.1)
+    assert press(t, SUPER, 1.11) == []             # not a double-tap: the first one recorded
+
+
+def test_unlock_after_the_recording_ended_elsewhere():
+    t = tracker()
+    _tap(t, 0.0)
+    press(t, CTRL, 0.3)
+    press(t, SUPER, 0.31)
+    release(t, SUPER, 0.4)
+    release(t, CTRL, 0.41)
+    t.unlock()                                     # e.g. the time limit stopped it
+    press(t, CTRL, 5.0)
+    press(t, SUPER, 5.01)
+    assert t.poll(5.3) == [("start", "bug")]       # back to normal

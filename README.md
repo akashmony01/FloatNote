@@ -87,6 +87,8 @@ Or from a clone of this repository: `./install.sh`. The script works with **apt*
 | **Ctrl+Super+Alt+N** | Open / close the FloatNote dropdown |
 | **Ctrl+Super+Alt+P** | Switch to the next project |
 
+**Hands-free:** tap the keys twice quickly to record without holding them, and tap once more to stop. Use it for long notes; some wireless keyboards report a key as released after a minute of holding.
+
 Recording starts once you've held the keys for a quarter second. You can record the next note while the last one is still being transcribed; each waiting one shows in its tab. Pressing any other key while holding throws the recording away, so normal shortcuts never record or copy by accident.
 
 ### The panel icon

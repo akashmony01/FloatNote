@@ -115,6 +115,7 @@ class Daemon:
 
         self._lock = threading.Lock()
         self._kind: str | None = None  # kind being recorded, None when idle
+        self._hands_free = False  # started by double-tap: keeps going until tapped again
         self._recording_project: int | None = None
         self._model_gen = 0  # bumped on every model switch; the newest one wins
         self.model_status = "Loading speech model…"  # shown while the model isn't ready
@@ -139,7 +140,7 @@ class Daemon:
     def close(self) -> None:
         with self._lock:
             if self._kind is not None:
-                self._cancel_timer()
+                self._ended()
                 self.recorder.stop()
                 self._kind = None
         self._jobs.put(None)
@@ -323,6 +324,7 @@ class Daemon:
     def ui_state(self) -> dict:
         return {
             "recording": self._kind,
+            "hands_free": self._hands_free,
             "started_at": self._started_at,
             "pending": self._pending,
             "queue": list(self._queue_kinds),  # kinds waiting, the first one in progress
@@ -488,12 +490,15 @@ class Daemon:
         self._after_start(reply, kind)
         return reply
 
-    def start_recording(self, kind: str) -> dict:
-        """Start recording (hold-to-record pressed). No-op if already recording."""
+    def start_recording(self, kind: str, hands_free: bool = False) -> dict:
+        """Start recording (hold-to-record pressed, or double-tapped for hands-free).
+        No-op if already recording."""
         with self._lock:
             if self._kind is not None:
                 return {"ok": True, "message": "already recording"}
             reply = self._start_recording(kind)
+            if reply.get("started"):
+                self._hands_free = hands_free
         self._after_start(reply, kind)
         return reply
 
@@ -510,7 +515,7 @@ class Daemon:
             if self._kind is None:
                 return {"ok": True, "message": "not recording"}
             self._kind = None
-            self._cancel_timer()
+            self._ended()
             self.recorder.stop()
         log.info("recording cancelled (another key pressed)")
         self._notify("Cancelled")
@@ -518,7 +523,10 @@ class Daemon:
 
     def on_hold_action(self, action: tuple) -> None:
         if action[0] == "start":
-            self.start_recording(action[1])
+            hands_free = action[2:] == ("hands-free",)
+            reply = self.start_recording(action[1], hands_free=hands_free)
+            if hands_free and not reply.get("started"):
+                self._unlock_keys()  # nothing to stop later
         elif action[0] == "stop":
             self.stop_recording()
         elif action[0] == "cancel":
@@ -557,10 +565,21 @@ class Daemon:
         self._notify()
         return {"ok": True, "message": f"recording {kind} note", "started": True}
 
+    def _ended(self) -> None:
+        """A recording ended (any way): stop its timer and any hands-free lock."""
+        self._cancel_timer()
+        if self._hands_free:
+            self._hands_free = False
+            self._unlock_keys()
+
+    def _unlock_keys(self) -> None:
+        if self.listener is not None:
+            self.listener.tracker.unlock()
+
     def _stop_recording(self) -> dict:
         kind = self._kind
         self._kind = None
-        self._cancel_timer()
+        self._ended()
         audio = self.recorder.stop()
         seconds = len(audio) / SAMPLE_RATE
         if seconds < MIN_RECORD_SECONDS:

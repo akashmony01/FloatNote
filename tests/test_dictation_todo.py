@@ -205,3 +205,22 @@ def test_recovered_dictation_is_saved_but_not_copied(tmp_path):
     assert notes2[0].kind == "dictation" and d2.copied == []
     assert notified == [("Dictation from before the restart", "It's in FloatNote's Dictation tab.")]
     d2.close()
+
+
+def test_hands_free_recording_state_and_unlock(tmp_path):
+    from floatnote.hotkeys import ChordTracker, parse_combo
+
+    d, notes, done = _daemon(tmp_path)
+    unlocked = []
+    tracker = ChordTracker({parse_combo("ctrl+super"): "bug"})
+    tracker.unlock = lambda: unlocked.append(1)
+    d.listener = type("L", (), {"tracker": tracker})()
+    d.start()
+    d.on_hold_action(("start", "bug", "hands-free"))
+    assert d.ui_state()["hands_free"] and d.ui_state()["recording"] == "bug"
+    d._auto_stop()  # the time limit ends it: the keys are unlocked
+    assert not d.ui_state()["hands_free"] and unlocked == [1]
+    assert done.wait(2)
+    d.on_hold_action(("start", "dictation", "hands-free"))  # dictation is off: never started
+    assert unlocked == [1, 1] and d.ui_state()["recording"] is None
+    d.close()

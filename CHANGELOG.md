@@ -10,6 +10,7 @@ All notable changes to FloatNote. The format follows [Keep a Changelog](https://
 - **Safety net:** if a transcription ever takes far too long (a minute plus three times the recording), FloatNote restarts itself and carries on with the waiting notes.
 - **After Quit, Ctrl+Super+Alt+N starts FloatNote again** (and opens the dropdown). FloatNote hands those keys to the desktop while it isn't running and takes them back when it starts.
 - Each recording that's waiting to be transcribed shows as its own row in its tab ("Transcribing…", then "Waiting…"), and the status line says how many are waiting.
+- **Hands-free recording:** tap the hold keys twice quickly to record without holding them; tap once more to stop. For long notes, and for wireless keyboards that report a key as released after about a minute (holding stopped those recordings at 61 s). Works for bugs, to-dos and dictation; typing while it records is ignored.
 - Settings → General can switch the To-do list off (Bugs are always on).
 - **Settings → Speech → Longest recording**: 1, 3, 5 or 10 minutes (was only in the config file).
 

@@ -161,9 +161,13 @@ def to_accelerator(toggle: str) -> str:
 
 class ChordTracker:
     """Pure state machine. Feed key events, collect actions:
-    ("start", kind), ("stop",), ("cancel",), ("tap", name), ("key", name).
+    ("start", kind), ("start", kind, "hands-free"), ("stop",), ("cancel",),
+    ("tap", name), ("key", name).
 
-    combos: hold gestures, e.g. {ctrl, super} -> "bug".
+    combos: hold gestures, e.g. {ctrl, super} -> "bug". Holding records while
+            held. Double-tapping (two short presses) records hands-free until
+            the combo is pressed once more: for notes longer than a keyboard
+            lets you hold a key (some wireless ones "let go" after 61 s).
     taps:   press-and-release gestures, e.g. {ctrl, super, alt} -> "copy". A tap
             fires when you let go, but only if no other key was pressed, so
             Ctrl+Super+Alt+N can still be a normal shortcut.
@@ -172,6 +176,8 @@ class ChordTracker:
             modifiers (and no other key) are held. Counts as "another key" for
             the gestures above, so it never copies or records.
     """
+
+    DOUBLE_TAP = 0.45  # seconds between letting go and pressing again
 
     def __init__(self, combos: dict[frozenset[str], str], delay: float = 0.25,
                  taps: dict[frozenset[str], str] | None = None,
@@ -193,6 +199,8 @@ class ChordTracker:
         self._active: frozenset[str] | None = None
         self._tap: frozenset[str] | None = None  # tap gesture currently held
         self._spoiled = False  # another key was involved; wait until all keys are up
+        self._short: tuple[frozenset[str], float] | None = None  # last short press of a combo, let go at
+        self._locked: frozenset[str] | None = None  # hands-free recording of this combo
 
     def fresh(self) -> "ChordTracker":
         """A new tracker with the same shortcuts and no keys held."""
@@ -216,6 +224,8 @@ class ChordTracker:
     def feed(self, code: int, value: int, now: float) -> list[tuple]:
         if value == 2:  # auto-repeat
             return []
+        if self._locked:
+            return self._feed_locked(code, value)
         actions: list[tuple] = []
         shortcut = self._key_shortcut(code) if value else None
         name = None if shortcut else self._tracked.get(code)
@@ -261,10 +271,47 @@ class ChordTracker:
         if not self._active and not self._tap:
             if held in self.combos and not self._others and not self._spoiled:
                 if held != self._candidate:
+                    short = self._short
+                    self._short = None
+                    if short and short[0] == held and now - short[1] <= self.DOUBLE_TAP:
+                        # Second short press: record hands-free.
+                        self._candidate = None
+                        self._locked = held
+                        self._spoiled = True  # letting go now must not do anything
+                        return actions + [("start", self.combos[held], "hands-free")]
                     self._candidate, self._since = held, now
             else:
+                if self._candidate and held < self._candidate and not self._others and not value:
+                    self._short = (self._candidate, now)  # let go before it started: a short press
                 self._candidate = None
         return actions + self.poll(now)
+
+    def _feed_locked(self, code: int, value: int) -> list[tuple]:
+        """Hands-free recording: only pressing the same combo again stops it;
+        everything else (typing, other shortcuts) is ignored."""
+        name = self._tracked.get(code)
+        if name:
+            (self._mods[name].add if value else self._mods[name].discard)(code)
+        elif value:
+            self._others.add(code)
+        else:
+            self._others.discard(code)
+        held = self._held()
+        if not held and not self._others:
+            self._spoiled = False
+        if value and held == self._locked and not self._others and not self._spoiled:
+            self._locked = None
+            self._spoiled = True  # releasing must not start anything
+            return [("stop",)]
+        return []
+
+    def unlock(self) -> None:
+        """The recording ended another way (time limit, cancelled in the app)."""
+        self._locked = None
+
+    @property
+    def hands_free(self) -> bool:
+        return self._locked is not None
 
     def poll(self, now: float) -> list[tuple]:
         if self._candidate and not self._active and now - self._since >= self.delay:
@@ -404,7 +451,9 @@ class HotkeyListener(threading.Thread):
         dropped), so no key stays 'stuck' down. A recording in progress is dropped."""
         if self.tracker._active:
             self._emit([("cancel",)])
+        locked = self.tracker._locked
         self.tracker = self.tracker.fresh()
+        self.tracker._locked = locked  # a hands-free recording goes on
 
     def _emit(self, actions) -> None:
         for action in actions:

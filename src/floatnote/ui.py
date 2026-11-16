@@ -911,7 +911,9 @@ class Dropdown(Gtk.Window):
             ("Record a bug by voice",
              f"Hold {key(cfg.hold_bug)}, describe what's wrong, then let go.\n\n"
              "The mic icon in your panel turns <b>red</b> while recording and <b>yellow</b> while "
-             "it writes the text. The note lands in the <b>Bugs</b> tab."),
+             "it writes the text. The note lands in the <b>Bugs</b> tab.\n\n"
+             "Long note? <b>Tap the keys twice</b> to record hands-free, and tap them once more to stop. "
+             "This works for to-dos and dictation too."),
             ("Add a to-do",
              f"Hold {key(cfg.hold_todo)} and say what you want to do. The icon turns <b>blue</b>.\n\n"
              "To-dos stay in the <b>To-do</b> tab until you tick them done, and show up when you log in. "
@@ -1604,6 +1606,12 @@ class Dropdown(Gtk.Window):
             from .daemon import NAMES
 
             text = f"● Recording {NAMES.get(state['recording'], state['recording'])}  {secs // 60}:{secs % 60:02d}"
+            if state.get("hands_free"):
+                from .daemon import KEY_FIELDS
+                from .hotkeys import pretty_combo
+
+                keys = getattr(self.app.daemon.cfg, KEY_FIELDS[state["recording"]])
+                text += f" · hands-free, tap {pretty_combo(keys)} to stop"
         elif time.monotonic() < self._flash_until:
             text = self._flash
         elif state["model_error"]:
