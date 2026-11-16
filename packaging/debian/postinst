@@ -13,7 +13,8 @@ if [ "$1" = "configure" ]; then
     # --only-binary: ready-made wheels only, never compile anything here.
     # faster-whisper --no-deps: its onnxruntime isn't built for every Python
     # (see pyproject.toml); a no-op where it's already installed.
-    if ! $PIP "$APP"/floatnote-*.whl || ! $PIP --no-deps "$FASTER_WHISPER"; then
+    # This version's wheel by name (filled in by build-deb.sh), never a wildcard.
+    if ! $PIP "$APP/floatnote-@VERSION@-py3-none-any.whl" || ! $PIP --no-deps "$FASTER_WHISPER"; then
         rm -rf "$APP/venv"
         echo "FloatNote: couldn't install its Python libraries (see the error above)." >&2
         echo "If it was a network problem, run: sudo dpkg --configure -a" >&2

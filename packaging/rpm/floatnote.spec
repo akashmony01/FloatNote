@@ -91,7 +91,9 @@ python3 -m venv --system-site-packages "$APP/venv"
 # (e.g. Fedora 45's 3.15; see pyproject.toml); a no-op where it's installed.
 FASTER_WHISPER="faster-whisper>=1.1,<2"  # same range as pyproject.toml
 PIP="$APP/venv/bin/pip install --quiet --disable-pip-version-check --no-input --only-binary=:all:"
-if ! $PIP "$APP"/floatnote-*.whl || ! $PIP --no-deps "$FASTER_WHISPER"; then
+# This version's wheel by name: on an upgrade %%post runs before the old
+# version's files are removed, so a wildcard would match both wheels.
+if ! $PIP "$APP/floatnote-%{version}-py3-none-any.whl" || ! $PIP --no-deps "$FASTER_WHISPER"; then
     rm -rf "$APP/venv"
     echo "FloatNote: couldn't install its Python libraries (see the error above)." >&2
     echo "If it was a network problem: sudo dnf reinstall floatnote" >&2

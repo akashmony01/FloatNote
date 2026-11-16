@@ -60,7 +60,9 @@ chmod 644 "$ROOT"/usr/share/applications/*.desktop "$ROOT"/etc/xdg/autostart/*.d
 
 install -m 644 "$HERE/../LICENSE" "$ROOT/usr/share/doc/floatnote/copyright"
 
-install -m 755 "$HERE/debian/postinst" "$HERE/debian/postrm" "$ROOT/DEBIAN/"
+install -m 755 "$HERE/debian/postrm" "$ROOT/DEBIAN/"
+sed "s/@VERSION@/$VERSION/" "$HERE/debian/postinst" > "$ROOT/DEBIAN/postinst"
+chmod 755 "$ROOT/DEBIAN/postinst"
 echo "/etc/xdg/autostart/floatnote.desktop" > "$ROOT/DEBIAN/conffiles"
 
 SIZE_KB=$(du -sk --exclude=DEBIAN "$ROOT" | cut -f1)
