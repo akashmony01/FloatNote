@@ -25,8 +25,9 @@ def test_icon_svg_is_valid_and_escaped():
     svg = tray.icon_svg("bug", "<&")
     root = ET.fromstring(svg)  # well-formed even with XML characters in the text
     assert root.tag.endswith("svg")
-    assert tray.COLORS["bug"] in svg
+    assert tray.COLORS["bug"] in svg and tray.LETTER_COLOR in svg  # mic: state, letters: purple
     assert "".join(root.itertext()) == "<&"
+    assert "".join(ET.fromstring(tray.icon_svg("idle", "ABC")).itertext()) == "AB"  # 2 letters fit
 
 
 def test_badge_icon_written_once_per_state_and_initials(tmp_path):

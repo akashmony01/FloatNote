@@ -82,6 +82,8 @@ def bar_label(name: str, limit: int = BAR_LABEL_MAX) -> str:
 # XFCE, Cinnamon) the project's initials are drawn into the icon itself.
 
 COLORS = {"idle": "#bdbdbd", "bug": "#ff4d4d", "idea": "#4da3ff", "busy": "#ffcc33", "ok": "#3ddc84"}
+LETTER_COLOR = "#b18cff"  # the project letters stay purple; the mic shows the state
+ICON_DESIGN = 2  # bump when icon_svg changes
 
 
 def project_initials(name: str) -> str:
@@ -102,27 +104,28 @@ def project_initials(name: str) -> str:
 
 
 def icon_svg(state: str, initials: str) -> str:
-    """The mic icon with a small badge of `initials` in the bottom-right corner,
-    in the state's colour (so red still means recording)."""
+    """A thin mic on the left in the state's colour (red still means recording)
+    and the project's 1-2 letters on the right in purple. Tray icons are
+    square (~22 px on KDE), so two letters is what stays readable."""
     from xml.sax.saxutils import escape
 
     color = COLORS[state]
-    mic = (f'<g transform="translate(-0.6,-0.4) scale(0.72)">'
+    mic = (f'<g transform="translate(-1.5,1.5) scale(0.62)">'
            f'<rect x="5" y="1" width="6" height="9" rx="3" fill="{color}"/>'
            f'<path d="M3 7.5a5 5 0 0 0 10 0" fill="none" stroke="{color}" stroke-width="1.6" stroke-linecap="round"/>'
            f'<path d="M8 12.6v2.2M5.5 15h5" fill="none" stroke="{color}" stroke-width="1.6" stroke-linecap="round"/>'
            f'</g>')
-    size = 7.2 if len(initials) == 1 else 6.4
-    badge = (f'<rect x="5.6" y="7" width="10.4" height="9" rx="2.2" fill="{color}"/>'
-             f'<text x="10.8" y="14.1" font-family="sans-serif" font-weight="bold" font-size="{size}" '
-             f'text-anchor="middle" fill="#1a1a1a">{escape(initials)}</text>')
+    letters = (f'<text x="11.2" y="11.6" font-family="sans-serif" font-weight="800" font-size="8.6" '
+               f'letter-spacing="-0.3" text-anchor="middle" fill="{LETTER_COLOR}">{escape(initials[:2])}</text>')
     return ('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">'
-            f'{mic}{badge}</svg>\n')
+            f'{mic}{letters}</svg>\n')
 
 
 def badge_icon(folder: Path, state: str, initials: str) -> str:
     """Write the badge icon (once) and return its icon name."""
-    name = f"floatnote-{state}-p{initials.encode().hex()}"
+    # The design version is in the name: files (and the panel's icon cache)
+    # from an older design are never reused.
+    name = f"floatnote-{state}-v{ICON_DESIGN}-p{initials.encode().hex()}"
     path = folder / f"{name}.svg"
     if not path.exists():
         path.write_text(icon_svg(state, initials))
