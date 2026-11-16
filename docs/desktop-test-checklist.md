@@ -17,7 +17,8 @@ fine; a live session needs `./install.sh`. Note the result next to each line, pl
 
 `floatnote doctor` → "Open/close: read from the keyboard".
 
-- [ ] Hold Ctrl+Super, talk, let go: a bug appears. Hold Super+Alt: an idea.
+- [ ] Hold Ctrl+Super, talk, let go: a bug appears. Hold Super+Alt: a to-do.
+- [ ] Record a second bug while the first still says "Transcribing…": both show as rows ("Transcribing…", "Waiting…") and both become notes.
 - [ ] Press Ctrl+Super+Alt, let go: bugs copied (icon flashes green).
 - [ ] **Ctrl+Super+Alt+N** opens the dropdown; again closes it. It does *not* copy the bugs.
 - [ ] **Ctrl+Super+Alt+P** switches project (tooltip / dropdown show the new one).
@@ -26,6 +27,23 @@ fine; a live session needs `./install.sh`. Note the result next to each line, pl
 - [ ] The desktop's own shortcut settings do **not** list FloatNote (see README, "How shortcuts work").
 - [ ] GNOME only, upgrading from 1.0: the old *FloatNote: open/close* custom shortcut is gone and
       Ctrl+Super+Alt+N opens the dropdown once (not open-then-close).
+
+## 2b. Dictation and To-do
+
+- [ ] A new install has no Dictation tab; Settings → General → Dictation on: the tab and the Keys row appear.
+- [ ] Hold Ctrl+Alt, talk, let go: the icon turns purple, then a notification "Copied, paste it anywhere"
+      with the start of the text. Paste into another app (e.g. a browser chat): it's the text.
+- [ ] The notification closes by itself and doesn't stay in the desktop's notification history.
+- [ ] The Dictation tab lists it with the time; ✎ edits, ⧉ copies again, 🗑 deletes; Clear history empties it.
+- [ ] Settings → General → To-do list off: the To-do tab and Super+Alt stop working; on again: back.
+- [ ] Upgrading from 1.2: old ideas are in the To-do tab, `todo.md` exists and `ideas.md` is gone.
+
+## 2c. Nothing lost
+
+- [ ] Record a long bug, then ⏻ → Restart while it says "Transcribing…": after the restart the note appears.
+- [ ] Same with ⏻ → Quit, then start FloatNote from the menu: the note appears.
+- [ ] After ⏻ → Quit, Ctrl+Super+Alt+N starts FloatNote and opens the dropdown (keyboard-access mode).
+      After that start the desktop's shortcut settings no longer list FloatNote.
 
 ## 3. Without keyboard access
 

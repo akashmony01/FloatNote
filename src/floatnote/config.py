@@ -26,18 +26,24 @@ keep_recordings = 0
 
 # Hold-to-record: hold these keys to record, let go to stop.
 # Needs your user in the "input" group (install.sh offers to do it).
+# hold_dictation: the text is copied to the clipboard, ready to paste anywhere.
 # copy_keys: press together and let go to copy all bugs.
 # toggle_keys: open/close FloatNote; next_project_keys: switch project.
 # Easiest to change from the Settings screen (gear button).
 hold_to_record = true
 hold_bug = "ctrl+super"
-hold_idea = "super+alt"
+hold_todo = "super+alt"
+hold_dictation = "ctrl+alt"
 copy_keys = "ctrl+super+alt"
 toggle_keys = "ctrl+super+alt+n"
 next_project_keys = "ctrl+super+alt+p"
 
 # Recording stops by itself after this many seconds.
 max_record_seconds = 180
+
+# Optional parts (bugs are always on).
+todo_enabled = true
+dictation_enabled = false
 
 sounds = true
 # Show the active project's name next to the mic in the panel (where the panel supports it).
@@ -63,11 +69,14 @@ class Config:
     keep_recordings: int = 0
     hold_to_record: bool = True
     hold_bug: str = "ctrl+super"
-    hold_idea: str = "super+alt"
+    hold_todo: str = "super+alt"
+    hold_dictation: str = "ctrl+alt"
     copy_keys: str = "ctrl+super+alt"
     toggle_keys: str = "ctrl+super+alt+n"
     next_project_keys: str = "ctrl+super+alt+p"
     max_record_seconds: int = 180
+    todo_enabled: bool = True
+    dictation_enabled: bool = False
     sounds: bool = True
     show_project_in_bar: bool = True
     show_panel_on_record: bool = False
@@ -83,10 +92,13 @@ def load(path: Path | None = None, create: bool = True) -> Config:
             return Config()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(DEFAULT_TOML)
+    if create:
+        _rename_old_settings(path)
     with path.open("rb") as f:
         raw = tomllib.load(f)
-    if "paste_intro" in raw:  # old name
-        raw.setdefault("copy_intro", raw.pop("paste_intro"))
+    for old, new in RENAMED.items():  # read-only load of an old file
+        if old in raw:
+            raw.setdefault(new, raw.pop(old))
     known = {f.name for f in fields(Config)}
     unknown = set(raw) - known
     if unknown:
@@ -95,6 +107,26 @@ def load(path: Path | None = None, create: bool = True) -> Config:
     if cfg.model not in MODELS:  # only download models we know about
         raise ValueError(f"Unknown model {cfg.model!r} in {path}. Choose one of: {', '.join(MODELS)}")
     return cfg
+
+
+# Settings that were renamed: old name -> new name.
+RENAMED = {"paste_intro": "copy_intro", "hold_idea": "hold_todo"}
+
+
+def _rename_old_settings(path: Path) -> None:
+    """Rewrite old setting names in config.toml (1.3: ideas became to-dos)."""
+    import re
+
+    text = path.read_text()
+    new = text
+    for old, name in RENAMED.items():
+        if re.search(rf"^{name}\s*=", new, re.M):
+            continue  # the new one is already there; the old line is ignored on load
+        new = re.sub(rf"^{old}(\s*=)", rf"{name}\1", new, flags=re.M)
+    if new != text:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(new)
+        tmp.replace(path)
 
 
 MODELS = {

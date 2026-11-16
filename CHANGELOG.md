@@ -2,6 +2,20 @@
 
 All notable changes to FloatNote. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-11-16
+
+### Added
+- **Dictation: type by voice in any app.** Hold **Ctrl+Alt**, talk, let go: the text is copied to the clipboard, ready to paste into a chat, an email or a form. A notification shows the start of it and closes by itself after a few seconds (they don't pile up). The new **Dictation** tab keeps your last 100 dictations to edit, copy again or delete. Off by default: switch it on in Settings → General. Completely offline, like everything else.
+- **Nothing gets lost any more.** Recordings wait on disk until they're text, so a crash, a restart or quitting FloatNote mid-transcription no longer loses them: they're finished at the next start.
+- **Safety net:** if a transcription ever takes far too long (a minute plus three times the recording), FloatNote restarts itself and carries on with the waiting notes.
+- **After Quit, Ctrl+Super+Alt+N starts FloatNote again** (and opens the dropdown). FloatNote hands those keys to the desktop while it isn't running and takes them back when it starts.
+- Each recording that's waiting to be transcribed shows as its own row in its tab ("Transcribing…", then "Waiting…"), and the status line says how many are waiting.
+- Settings → General can switch the To-do list off (Bugs are always on).
+
+### Changed
+- **Ideas are now To-do.** The tab, the guide, Settings, messages and the readable file (`todo.md`, was `ideas.md`) all say to-do; your ideas moved over as to-dos. For scripts: `floatnote toggle-todo` (was `toggle-idea`), `floatnote list --todos` (was `--ideas`), and the `hold_idea` setting is now `hold_todo` (renamed in your config automatically).
+- Recording a dictation never pops up the dropdown, even with "show the dropdown when recording" on.
+
 ## [1.2.0] - 2026-11-16
 
 ### Added
@@ -68,6 +82,7 @@ First public release.
 - `install.sh` as an alternative (per-user install from the source bundle); `floatnote doctor` checks the setup.
 - Privacy by default: notes stay on your computer, files are private to your user, the log never contains note text, and recordings are not kept.
 
+[1.3.0]: https://github.com/akashmony01/FloatNote/releases/tag/v1.3.0
 [1.2.0]: https://github.com/akashmony01/FloatNote/releases/tag/v1.2.0
 [1.1.1]: https://github.com/akashmony01/FloatNote/releases/tag/v1.1.1
 [1.1.0]: https://github.com/akashmony01/FloatNote/releases/tag/v1.1.0

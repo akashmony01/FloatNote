@@ -17,7 +17,7 @@ from gi.repository import Gio, GLib
 log = logging.getLogger("floatnote")
 
 ICON_DIR = Path(__file__).parent / "icons"
-ICONS = {"idle", "bug", "idea", "busy", "ok"}
+ICONS = {"idle", "bug", "todo", "dictation", "busy", "ok"}
 DESKTOP_ID = "floatnote.desktop"
 
 _SNI_XML = """
@@ -81,7 +81,8 @@ def bar_label(name: str, limit: int = BAR_LABEL_MAX) -> str:
 # Only GNOME shows text next to a tray icon (the label above). Elsewhere (KDE,
 # XFCE, Cinnamon) the project's initials are drawn into the icon itself.
 
-COLORS = {"idle": "#bdbdbd", "bug": "#ff4d4d", "idea": "#4da3ff", "busy": "#ffcc33", "ok": "#3ddc84"}
+COLORS = {"idle": "#bdbdbd", "bug": "#ff4d4d", "todo": "#4da3ff", "dictation": "#b18cff",
+          "busy": "#ffcc33", "ok": "#3ddc84"}
 ICON_DESIGN = 3  # bump when icon_svg changes
 
 

@@ -107,12 +107,21 @@ def parse_key_combo(text: str) -> frozenset[str]:
     return names
 
 
-def validate_keys(bug: str, idea: str, copy: str, toggle: str, next_project: str | None = None) -> str | None:
-    """Check a full set of shortcuts. Returns a message for the user, or None if fine."""
-    labels = {"bug": "Record bug", "idea": "Record idea", "copy": "Copy bugs", "toggle": "Open/close",
-              "next": "Next project"}
+HOLD_KEYS = ("bug", "todo", "dictation", "copy")  # gestures: modifiers (+ an arrow) only
+PRESS_KEYS = ("toggle", "next")                   # modifiers plus one normal key
+KEY_LABELS = {"bug": "Record bug", "todo": "Record to-do", "dictation": "Dictate", "copy": "Copy bugs",
+              "toggle": "Open/close", "next": "Next project"}
+
+
+def validate_keys(values: dict[str, str | None]) -> str | None:
+    """Check a full set of shortcuts ({"bug": "ctrl+super", ...}; missing or None
+    = not checked). Returns a message for the user, or None if fine."""
+    labels = KEY_LABELS
     combos = {}
-    for which, text in (("bug", bug), ("idea", idea), ("copy", copy)):
+    for which in HOLD_KEYS:
+        text = values.get(which)
+        if text is None:
+            continue
         try:
             combos[which] = parse_combo(text)
         except ValueError:
@@ -121,7 +130,8 @@ def validate_keys(bug: str, idea: str, copy: str, toggle: str, next_project: str
         if len(combos[which]) < 2:
             return f"{labels[which]}: use at least two keys, e.g. Ctrl+Super."
     # Key shortcuts: modifiers plus exactly one normal key.
-    for which, text in (("toggle", toggle), ("next", next_project)):
+    for which in PRESS_KEYS:
+        text = values.get(which)
         if text is None:
             continue
         try:

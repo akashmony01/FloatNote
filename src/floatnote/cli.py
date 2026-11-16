@@ -8,12 +8,13 @@ from . import __version__, client
 # Commands forwarded to the running daemon. name -> help text
 DAEMON_COMMANDS = {
     "toggle-bug": "start/stop recording a bug (session) note",
-    "toggle-idea": "start/stop recording an idea note",
+    "toggle-todo": "start/stop recording a to-do",
+    "toggle-dictation": "start/stop dictating (the text is copied to the clipboard)",
     "copy-all": "copy bug notes to the clipboard for Claude, then clear the list",
     "undo": "restore the last archived batch of notes",
     "clear": "archive session notes without copying them",
     "show": "show/hide the FloatNote window",
-    "home": "show the window on the Ideas tab",
+    "home": "show the window on the To-do tab",
     "status": "show what the daemon is doing",
     "quit": "stop the daemon",
     "next-project": "switch to the next project",
@@ -52,7 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     lp.add_argument("--project", metavar="NAME", help="which project (default: the one linked to this "
                     "folder, else the active one)")
     lp.add_argument("--take", action="store_true", help="also clear them, like Copy all (undo restores)")
-    lp.add_argument("--ideas", action="store_true", help="list open ideas instead")
+    lp.add_argument("--todos", action="store_true", help="list open to-dos instead")
     lp.add_argument("--json", action="store_true", help="print JSON")
 
     sub.add_parser("projects", help="list projects")
@@ -60,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("name", nargs="?", help="project to switch to")
 
     dp = sub.add_parser("daemon", help="run the background daemon (used by autostart)")
-    dp.add_argument("--login", action="store_true", help="started at login: show open ideas")
+    dp.add_argument("--login", action="store_true", help="started at login: show open to-dos")
     dp.add_argument("--headless", action="store_true", help="no windows, hotkeys and clipboard only")
 
     sp = sub.add_parser("setup-shortcuts", help="set up the open/close and next-project shortcuts")
@@ -82,7 +83,7 @@ def _open_store():
     from . import paths
     from .store import Store
 
-    return Store(paths.db_file(), export_path=paths.ideas_export_file())
+    return Store(paths.db_file(), export_path=paths.todo_export_file())
 
 
 def _resolve_project(store, name: str | None):
@@ -98,18 +99,18 @@ def _resolve_project(store, name: str | None):
     return store.project_for_folder(os.getcwd()) or store.project(store.active_project_id())
 
 
-def _list(ideas: bool, as_json: bool, project_name: str | None = None, take: bool = False) -> int:
+def _list(todos: bool, as_json: bool, project_name: str | None = None, take: bool = False) -> int:
     """Print notes straight from the database (no daemon needed)."""
     import json
 
     store = _open_store()
     try:
-        if ideas:
-            notes = store.ideas()
+        if todos:
+            notes = store.todos()
             if as_json:
                 print(json.dumps([n.to_dict() for n in notes], indent=2))
             elif not notes:
-                print("No open ideas.")
+                print("No open to-dos.")
             else:
                 for i, n in enumerate(notes, 1):
                     print(f"{i}. {n.text} ({n.created_at[:10]})")
@@ -397,7 +398,7 @@ def main(argv: list[str] | None = None) -> int:
         return _model(args.name, args.beam)
 
     if args.command == "list":
-        return _list(ideas=args.ideas, as_json=args.json, project_name=args.project, take=args.take)
+        return _list(todos=args.todos, as_json=args.json, project_name=args.project, take=args.take)
 
     if args.command == "projects":
         return _projects()

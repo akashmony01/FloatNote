@@ -5,17 +5,17 @@ def test_session_ideas_edit_delete(tmp_path):
     s = Store(tmp_path / "n.db")
     a = s.add("bug", "first", 2.0)
     b = s.add("bug", "second")
-    i = s.add("idea", "an idea")
+    i = s.add("todo", "an idea")
     assert [n.text for n in s.session_notes()] == ["first", "second"]
     assert s.update_text(a, "first fixed")
     assert s.get(a).updated_at is not None
     assert s.delete(b)
-    assert s.set_kind(a, "idea")
+    assert s.set_kind(a, "todo")
     assert s.session_notes() == []
-    assert [n.id for n in s.ideas()] == [i, a]  # newest first (by creation)
+    assert [n.id for n in s.todos()] == [i, a]  # newest first (by creation)
     assert s.set_done(i, True)
-    assert [n.id for n in s.ideas()] == [a]
-    assert len(s.ideas(include_done=True)) == 2
+    assert [n.id for n in s.todos()] == [a]
+    assert len(s.todos(include_done=True)) == 2
     assert not s.delete(999)
 
 
@@ -34,7 +34,7 @@ def test_undo_restores_latest_batch_only(tmp_path):
 
 def test_archive_ignores_ideas(tmp_path):
     s = Store(tmp_path / "n.db")
-    i = s.add("idea", "keep me")
+    i = s.add("todo", "keep me")
     s.archive_session([i])
     assert s.get(i).archived_at is None
 
@@ -57,11 +57,11 @@ def test_format_paste():
     assert format_paste("", notes) == "1. a\n2. b\n"
 
 
-def test_ideas_markdown_export(tmp_path):
-    md = tmp_path / "ideas.md"
+def test_todo_markdown_export(tmp_path):
+    md = tmp_path / "todo.md"
     s = Store(tmp_path / "n.db", export_path=md)
     assert "## Open (0)" in md.read_text()
-    i = s.add("idea", "dark mode toggle")
+    i = s.add("todo", "dark mode toggle")
     s.add("bug", "not exported")
     assert "- [ ] dark mode toggle" in md.read_text()
     s.set_done(i, True)

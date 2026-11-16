@@ -72,7 +72,11 @@ def _check_hold_keys() -> tuple[str, str]:
         return WARN, "config error"
     if not cfg.hold_to_record:
         return OK, "off in config"
-    combos = f"hold {cfg.hold_bug} = bug, {cfg.hold_idea} = idea"
+    combos = f"hold {cfg.hold_bug} = bug"
+    if cfg.todo_enabled:
+        combos += f", {cfg.hold_todo} = to-do"
+    if cfg.dictation_enabled:
+        combos += f", {cfg.hold_dictation} = dictation"
     try:  # the running app knows best whether it can read the keyboard
         status = client.send("status")
         if status.get("hold_on"):

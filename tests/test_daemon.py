@@ -70,10 +70,10 @@ def test_toggle_records_and_transcribes():
 
 def test_other_key_stops_and_keeps_kind():
     d, notes, done = make()
-    d.handle({"cmd": "toggle-idea"})
+    d.handle({"cmd": "toggle-todo"})
     d.handle({"cmd": "toggle-bug"})
     assert done.wait(2)
-    assert notes[0].kind == "idea"
+    assert notes[0].kind == "todo"
     d.close()
 
 
@@ -146,9 +146,9 @@ def record_note(d, done, kind="toggle-bug"):
 def test_notes_are_saved_to_store():
     d, notes, done = make()
     record_note(d, done)
-    record_note(d, done, "toggle-idea")
+    record_note(d, done, "toggle-todo")
     assert [n.text for n in d.store.session_notes()] == ["the button is broken"]
-    assert len(d.store.ideas()) == 1
+    assert len(d.store.todos()) == 1
     d.close()
 
 
@@ -230,10 +230,10 @@ def test_clear_archives_without_copying():
 
 def test_copy_note_copies_one_idea_without_archiving():
     d, notes, done = make()
-    idea_id = d.store.add("idea", "Dark mode for the dropdown")
+    idea_id = d.store.add("todo", "Dark mode for the dropdown")
     assert d.handle({"cmd": "copy-note", "id": idea_id})["ok"]
     assert d.copied == ["Dark mode for the dropdown"]
-    assert [n.text for n in d.store.ideas()] == ["Dark mode for the dropdown"]  # still there
+    assert [n.text for n in d.store.todos()] == ["Dark mode for the dropdown"]  # still there
     assert not d.handle({"cmd": "copy-note", "id": 999})["ok"]
     assert not d.handle({"cmd": "copy-note", "id": "1"})["ok"]
     d.close()
@@ -254,11 +254,11 @@ def test_keeps_only_recent_recordings(tmp_path, monkeypatch):
 
 def test_hold_actions_start_stop_cancel():
     d, notes, done = make()
-    d.on_hold_action(("start", "idea"))
-    assert d.ui_state()["recording"] == "idea"
+    d.on_hold_action(("start", "todo"))
+    assert d.ui_state()["recording"] == "todo"
     assert d.handle({"cmd": "start-bug"})["message"] == "already recording"
     d.on_hold_action(("stop",))
-    assert done.wait(2) and notes[0].kind == "idea"
+    assert done.wait(2) and notes[0].kind == "todo"
     d.on_hold_action(("start", "bug"))
     d.on_hold_action(("cancel",))
     assert d.ui_state()["recording"] is None

@@ -219,13 +219,20 @@ def test_capture_records_combo_and_blocks_actions():
 
 
 def test_validate_keys():
-    v = hotkeys.validate_keys
-    assert v("ctrl+super", "super+alt", "ctrl+super+alt", "ctrl+super+alt+n") is None
-    assert "same keys" in v("ctrl+super", "ctrl+super", "ctrl+super+alt", "ctrl+super+alt+n")
-    assert "at least two" in v("ctrl", "super+alt", "ctrl+super+alt", "ctrl+super+alt+n")
-    assert "Record bug" in v("ctrl+n", "super+alt", "ctrl+super+alt", "ctrl+super+alt+n")
-    assert "Open/close" in v("ctrl+super", "super+alt", "ctrl+super+alt", "ctrl+super+alt")
-    assert "Open/close" in v("ctrl+super", "super+alt", "ctrl+super+alt", "n")
+    good = {"bug": "ctrl+super", "todo": "super+alt", "dictation": "ctrl+alt", "copy": "ctrl+super+alt",
+            "toggle": "ctrl+super+alt+n", "next": "ctrl+super+alt+p"}
+
+    def v(**changes):
+        return hotkeys.validate_keys({**good, **changes})
+
+    assert v() is None
+    assert "same keys" in v(todo="ctrl+super")
+    assert "Dictate and Record bug" in v(dictation="ctrl+super")
+    assert "at least two" in v(bug="ctrl")
+    assert "Record bug" in v(bug="ctrl+n")
+    assert "Open/close" in v(toggle="ctrl+super+alt")
+    assert "Open/close" in v(toggle="n")
+    assert hotkeys.validate_keys({"bug": "ctrl+super"}) is None  # missing ones aren't checked
 
 
 def test_to_accelerator():

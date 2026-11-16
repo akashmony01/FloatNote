@@ -15,15 +15,17 @@ When you build with an AI coding agent, you spend your time testing: click aroun
 
 ## Features
 
-- **Hold-to-record** from any app: Ctrl+Super for a bug, Super+Alt for an idea.
+- **Hold-to-record** from any app: Ctrl+Super for a bug, Super+Alt for a to-do.
+- **Dictation** (switch it on in Settings): hold Ctrl+Alt, talk, let go, and the text is copied, ready to paste into any app: a chat, an email, a form. Fully offline.
 - **Offline speech to text** (Whisper `small.en`, or `base.en` for speed).
-- **Panel icon** that turns red / blue while recording, yellow while transcribing, green when copied, and shows the active project.
+- **Panel icon** that turns red / blue / purple while recording, yellow while transcribing, green when copied, and shows the active project.
 - **Works on GNOME, KDE Plasma, Cinnamon and XFCE**, Wayland or X11.
 - **Copy all** as a numbered list with your own heading; **Undo** if you copied too early.
 - **Projects**: one bug list per app you test, each optionally linked to its code folder.
 - **Claude Code integration** with `floatnote list` (no setup).
 - **Word fixes**: teach it names it mishears ("whitetail" → "Wagtail"); it offers a fix when you correct a note.
-- **Ideas** list for things you want to build later, shown at login.
+- **To-do** list, shown at login; tick items off when done.
+- **Nothing is lost**: recordings wait on disk until they're text, so a crash, restart or quit never loses a note, and FloatNote restarts itself if a transcription ever gets stuck.
 - Every shortcut can be changed in Settings by just pressing the new keys.
 
 ## Requirements
@@ -79,12 +81,13 @@ Or from a clone of this repository: `./install.sh`. The script works with **apt*
 | Keys | What it does |
 |---|---|
 | **Hold Ctrl+Super** | Record a **bug** while held, let go to stop |
-| **Hold Super+Alt** | Record an **idea** while held, let go to stop |
+| **Hold Super+Alt** | Record a **to-do** while held, let go to stop |
+| **Hold Ctrl+Alt** | **Dictate**: the text is copied to the clipboard (off until you switch on Dictation) |
 | **Press Ctrl+Super+Alt, let go** | **Copy all bugs** of the active project and clear the list |
 | **Ctrl+Super+Alt+N** | Open / close the FloatNote dropdown |
 | **Ctrl+Super+Alt+P** | Switch to the next project |
 
-Recording starts once you've held the keys for a quarter second. Pressing any other key while holding throws the recording away, so normal shortcuts never record or copy by accident.
+Recording starts once you've held the keys for a quarter second. You can record the next note while the last one is still being transcribed; each waiting one shows in its tab. Pressing any other key while holding throws the recording away, so normal shortcuts never record or copy by accident.
 
 ### The panel icon
 
@@ -92,17 +95,18 @@ Recording starts once you've held the keys for a quarter second. Pressing any ot
 |---|---|
 | grey | ready |
 | red | recording a bug |
-| blue | recording an idea |
+| blue | recording a to-do |
+| purple | dictating |
 | yellow | transcribing (or loading the model) |
 | green (2 s) | bugs copied |
 
 The icon also shows the active project: on GNOME its name appears next to the mic; KDE, Cinnamon and XFCE can't show text next to tray icons, so the project's first two letters (e.g. **CW** for *Client website*) are drawn as a small badge on the mic. The built-in General project shows the plain icon. Turn either off in Settings → General. Hovering the icon always shows the full project name. If you pin FloatNote to the dock or task manager, its icon shows how many bugs are waiting.
 
-**Click** the icon (or press Ctrl+Super+Alt+N) to open the dropdown; on Ubuntu's GNOME extension it takes a **double-click**. The dropdown opens next to the icon, on whichever side your panel is (top on GNOME, bottom on KDE and Mint by default). It closes when you click elsewhere or press Esc. At the top right: **ⓘ** opens the short guide, **⚙** Settings, **⤢** switches between a compact and a large dropdown.
+**Click** the icon (or press Ctrl+Super+Alt+N) to open the dropdown; on Ubuntu's GNOME extension it takes a **double-click**. The dropdown opens next to the icon, on whichever side your panel is (top on GNOME, bottom on KDE and Mint by default). It closes when you click elsewhere or press Esc. At the top right: **ⓘ** opens the short guide, **⚙** Settings, **⏻** restarts or quits FloatNote, **⤢** switches between a compact and a large dropdown.
 
-### Bugs, Ideas and Projects
+### Bugs, To-do, Dictation and Projects
 
-- **Bugs**: the active project's bugs, newest first. Type a bug in the box at the top (Enter adds it, Shift+Enter for a new line). Double-click a note or press ✎ to correct it; ★ moves it to Ideas. **Copy all** copies the list oldest first:
+- **Bugs**: the active project's bugs, newest first. Type a bug in the box at the top (Enter adds it, Shift+Enter for a new line). Double-click a note or press ✎ to correct it; ★ moves it to To-do. **Copy all** copies the list oldest first:
 
   ```
   I tested the app and found these issues. Please fix them:
@@ -112,7 +116,8 @@ The icon also shows the active project: on GNOME its name appears next to the mi
   ```
 
   ↶ **Undo** brings back the last copied or cleared batch.
-- **Ideas**: one shared list; tick an idea when it's done. Shown at login when you have open ones.
+- **To-do**: one shared list; tick an item when it's done, ⧉ copies one. Shown at login when you have open ones. Switch the list off in Settings → General if you don't need it.
+- **Dictation** (off until you switch it on in Settings → General): hold **Ctrl+Alt**, talk, let go. The text is copied and a notification shows the start of it; it closes by itself after a few seconds. The tab keeps your last 100 dictations to edit, copy again or delete.
 - **Projects**: one bug list per app you test. The active project is shown under the tabs (`Client website · 3 ▾`); click it to switch. New bugs and Copy all always use the active project. In the Projects tab you can add, rename, delete (FloatNote asks whether to move the bugs to *General* or delete them) and 📁 **link a code folder**.
 
 <img src="docs/screenshots/selector.png" width="300" alt="Switching projects">
@@ -125,7 +130,7 @@ Claude Code can run FloatNote's command itself, nothing to configure:
 floatnote list                       # bugs of this folder's project (or the active one)
 floatnote list --take                # same, and clear them like Copy all (Undo restores)
 floatnote list --project "Client website"
-floatnote list --ideas
+floatnote list --todos
 floatnote list --json
 ```
 
@@ -141,7 +146,7 @@ So link each project to its code folder once, open Claude Code in that folder an
 - **Copy**: the heading above the copied list, with a live preview. Empty means just the numbered list.
 - **Speech**: `small.en` (accurate) or `base.en` (fastest).
 - **Words**: *fix misheard words* ("whitetail → Wagtail") and *hint words* (names and tech terms Whisper should know). When you correct a word in a note, FloatNote offers to remember the fix.
-- **General**: show the project on the panel icon, start/stop sounds, show ideas at login, show the guide.
+- **General**: switch the To-do list and Dictation on or off, show the project on the panel icon, start/stop sounds, show to-dos at login, show the guide.
 
 <img src="docs/screenshots/settings-keys.png" width="300" alt="Settings: Keys"> <img src="docs/screenshots/settings-words.png" width="300" alt="Settings: Words">
 
@@ -152,7 +157,8 @@ Everything is also in `~/.config/floatnote/config.toml` (restart with `floatnote
 | `model` | `small.en` | `base.en`, `small.en`, `medium.en`, `distil-small.en` |
 | `beam_size` | `5` | `1` is a little faster, less accurate |
 | `copy_intro` | "I tested the app…" | Heading of the copied list; `""` for none |
-| `hold_bug` / `hold_idea` | `ctrl+super` / `super+alt` | Hold-to-record keys |
+| `hold_bug` / `hold_todo` / `hold_dictation` | `ctrl+super` / `super+alt` / `ctrl+alt` | Hold-to-record keys |
+| `todo_enabled` / `dictation_enabled` | `true` / `false` | Optional parts |
 | `copy_keys` | `ctrl+super+alt` | Press and let go to copy all bugs |
 | `toggle_keys` / `next_project_keys` | `ctrl+super+alt+n` / `…+p` | Open/close, next project |
 | `vocabulary` / `replacements` | | Hint words / word fixes |
@@ -194,14 +200,15 @@ Without keyboard access, FloatNote registers **open/close** and **next project**
 | Cinnamon | Keyboard → Shortcuts → Custom Shortcuts |
 | XFCE | Keyboard → Application Shortcuts |
 
-FloatNote switches between the two by itself every time it starts (never both, or each press would fire twice). Change the keys in FloatNote's Settings → Keys, not in the desktop's settings. `floatnote setup-shortcuts` redoes this by hand; `--remove` removes the desktop shortcuts.
+FloatNote switches between the two by itself every time it starts (never both, or each press would fire twice). When you **quit** FloatNote while it reads the keyboard, it hands open/close to the desktop, so Ctrl+Super+Alt+N starts it again; the next start takes the keys back. Change the keys in FloatNote's Settings → Keys, not in the desktop's settings. `floatnote setup-shortcuts` redoes this by hand; `--remove` removes the desktop shortcuts.
 
 ## Files
 
 | Path | What |
 |---|---|
 | `~/.local/share/floatnote/floatnote.db` | Your notes and projects (SQLite) |
-| `~/.local/share/floatnote/ideas.md` | Readable copy of your ideas, updated automatically |
+| `~/.local/share/floatnote/todo.md` | Readable copy of your to-dos, updated automatically |
+| `~/.local/share/floatnote/queue/` | Recordings waiting to be transcribed (deleted once they're text) |
 | `~/.local/share/floatnote/floatnote.log` | Log (no note text), check here if something fails |
 | `~/.local/share/floatnote/models/` | Speech models (install script, or downloaded on first use) |
 | `/usr/lib/floatnote/models/` | Speech models (.deb / .rpm, shared by all users) |

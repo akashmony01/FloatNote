@@ -25,8 +25,18 @@ def db_file() -> Path:
     return data_dir() / "floatnote.db"
 
 
-def ideas_export_file() -> Path:
+def todo_export_file() -> Path:
+    return data_dir() / "todo.md"
+
+
+def old_ideas_export_file() -> Path:
+    """Where FloatNote before 1.3 wrote the ideas list (removed on upgrade)."""
     return data_dir() / "ideas.md"
+
+
+def queue_dir() -> Path:
+    """Recordings waiting to be transcribed (so none is lost on a crash or restart)."""
+    return data_dir() / "queue"
 
 
 def recordings_dir() -> Path:

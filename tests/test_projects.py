@@ -20,7 +20,7 @@ def test_old_database_moves_bugs_into_general(tmp_path):
     s = Store(path)
     assert [p.name for p in s.projects()] == ["General"]
     assert s.session_notes(GENERAL_ID)[0].text == "old bug"
-    assert s.ideas()[0].project_id is None
+    assert s.todos()[0].project_id is None
     assert s.active_project_id() == GENERAL_ID
 
 
@@ -29,11 +29,11 @@ def test_bugs_are_per_project_and_ideas_shared(tmp_path):
     web = s.add_project("Client website")
     s.add("bug", "general bug")
     s.add("bug", "web bug", project_id=web)
-    s.add("idea", "shared idea", project_id=web)  # ideas ignore projects
+    s.add("todo", "shared idea", project_id=web)  # ideas ignore projects
     assert [n.text for n in s.session_notes(web)] == ["web bug"]
     assert [n.text for n in s.session_notes(GENERAL_ID)] == ["general bug"]
     assert len(s.session_notes()) == 2
-    assert s.ideas()[0].project_id is None
+    assert s.todos()[0].project_id is None
     assert s.bug_counts() == {GENERAL_ID: 1, web: 1}
 
 
@@ -78,7 +78,7 @@ def test_moving_bug_to_idea_drops_project(tmp_path):
     s = Store(tmp_path / "n.db")
     web = s.add_project("Web")
     n = s.add("bug", "x", project_id=web)
-    s.set_kind(n, "idea")
+    s.set_kind(n, "todo")
     assert s.get(n).project_id is None
 
 

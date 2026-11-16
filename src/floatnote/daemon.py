@@ -16,15 +16,17 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Protocol
 
 import numpy as np
 
-from . import client, clipboard, paths
+from . import client, clipboard, notify, paths
 from .config import Config
 from .recorder import SAMPLE_RATE, Recorder, save_wav
 from .sounds import Sounds
 from .store import GENERAL_ID, Note, Store, format_paste
+from .transcriber import read_wav
 
 log = logging.getLogger("floatnote")
 
@@ -38,7 +40,18 @@ ADD_TO_INPUT_GROUP = (
     "grep '^input:' /usr/lib/group >> /etc/group; fi; "
     'exec usermod -aG input "$1"'
 )
-KINDS = {"toggle-bug": "bug", "toggle-idea": "idea"}
+KINDS = {"toggle-bug": "bug", "toggle-todo": "todo", "toggle-dictation": "dictation"}
+NAMES = {"bug": "bug", "todo": "to-do", "dictation": "dictation"}  # for messages
+
+# Safety net: a transcription taking longer than this is considered stuck, and
+# FloatNote restarts itself (queued recordings are on disk and survive).
+STUCK_BASE_SECONDS = 60
+STUCK_PER_AUDIO_SECOND = 3
+
+
+# Shortcut name (Settings → Keys) -> config field.
+KEY_FIELDS = {"bug": "hold_bug", "todo": "hold_todo", "dictation": "hold_dictation", "copy": "copy_keys",
+              "toggle": "toggle_keys", "next": "next_project_keys"}
 
 
 def model_is_downloaded(name: str) -> bool:
@@ -62,16 +75,31 @@ class _Job:
     kind: str
     audio: np.ndarray
     project_id: int | None = None  # project that was active when recording started
+    file: Path | None = None  # its copy in the queue folder, deleted when done
+    recovered: bool = False  # left over from before a restart
+
+    @property
+    def seconds(self) -> float:
+        return len(self.audio) / SAMPLE_RATE
+
+
+def stuck_after(audio_seconds: float) -> float:
+    """How long one transcription may take before FloatNote calls it stuck."""
+    return STUCK_BASE_SECONDS + STUCK_PER_AUDIO_SECOND * audio_seconds
 
 
 class Daemon:
     def __init__(self, cfg: Config, store: Store, *, recorder=None, sounds=None,
                  transcriber_factory: Callable | None = None,
                  on_note: Callable[[Note], None] | None = None,
-                 copy: Callable[[str], None] = clipboard.copy):
+                 copy: Callable[[str], None] = clipboard.copy,
+                 queue_dir: Path | None = None,
+                 desktop_notify: Callable[[str, str], None] = notify.show):
         self.cfg = cfg
         self.store = store
         self.copy = copy
+        self.queue_dir = queue_dir  # None: queued recordings only in memory (tests)
+        self.desktop_notify = desktop_notify
         self.recorder = recorder or Recorder()
         self.sounds = sounds or Sounds(cfg.sounds)
         self._transcriber_factory = transcriber_factory or self._default_transcriber
@@ -83,6 +111,7 @@ class Daemon:
         # "desktop" (the desktop's own shortcut settings) or None (nobody).
         self.shortcut_method: str | None = None
         self.on_quit: Callable[[], None] = lambda: None
+        self.on_stuck: Callable[[], None] = self._restart_when_stuck
 
         self._lock = threading.Lock()
         self._kind: str | None = None  # kind being recorded, None when idle
@@ -93,6 +122,8 @@ class Daemon:
         self._timer: threading.Timer | None = None
         self._jobs: queue.Queue[_Job | None] = queue.Queue()
         self._pending = 0  # recordings queued or being transcribed
+        self._queue_kinds: list[str] = []  # their kinds, oldest (= in progress) first
+        self._deadline: float | None = None  # when the current transcription counts as stuck
         self._transcriber = None
         self.model_ready = threading.Event()
         self.model_error: str | None = None
@@ -101,7 +132,9 @@ class Daemon:
     # ---- lifecycle -------------------------------------------------------
 
     def start(self) -> None:
+        self._recover_queue()
         self._worker.start()
+        threading.Thread(target=self._watchdog, name="watchdog", daemon=True).start()
 
     def close(self) -> None:
         with self._lock:
@@ -139,11 +172,19 @@ class Daemon:
         """Change a simple setting (copy_intro, sounds, home_on_login) and save it."""
         from . import config
 
-        assert key in ("copy_intro", "sounds", "home_on_login", "show_project_in_bar"), key
+        assert key in ("copy_intro", "sounds", "home_on_login", "show_project_in_bar",
+                       "todo_enabled", "dictation_enabled"), key
         setattr(self.cfg, key, value)
         if key == "sounds":
             self.sounds.enabled = value
         config.set_values({key: value})
+        if key.endswith("_enabled") and self.listener is not None:
+            self.listener.tracker = build_tracker(self.cfg)
+        self._notify()
+
+    def enabled(self, kind: str) -> bool:
+        """Bugs are always on; to-do and dictation can be switched off in Settings."""
+        return {"todo": self.cfg.todo_enabled, "dictation": self.cfg.dictation_enabled}.get(kind, True)
 
     def can_capture_keys(self) -> bool:
         """Can FloatNote read the keyboard (to capture any new shortcut)?"""
@@ -162,15 +203,14 @@ class Daemon:
             self.listener.cancel_capture()
 
     def set_keys(self, which: str, combo: str) -> str | None:
-        """Change one shortcut ('bug', 'idea', 'copy', 'toggle', 'next'). Returns an error or None."""
+        """Change one shortcut (a key of KEY_FIELDS). Returns an error or None."""
         from . import config
         from .hotkeys import validate_keys
 
-        field = {"bug": "hold_bug", "idea": "hold_idea", "copy": "copy_keys", "toggle": "toggle_keys",
-                 "next": "next_project_keys"}[which]
-        values = {"bug": self.cfg.hold_bug, "idea": self.cfg.hold_idea, "copy": self.cfg.copy_keys,
-                  "toggle": self.cfg.toggle_keys, "next": self.cfg.next_project_keys, which: combo}
-        error = validate_keys(values["bug"], values["idea"], values["copy"], values["toggle"], values["next"])
+        field = KEY_FIELDS[which]
+        values = {w: getattr(self.cfg, f) for w, f in KEY_FIELDS.items()}
+        values[which] = combo
+        error = validate_keys(values)
         if error:
             return error
         if which in ("toggle", "next") and self.shortcut_method == "desktop":
@@ -285,6 +325,7 @@ class Daemon:
             "recording": self._kind,
             "started_at": self._started_at,
             "pending": self._pending,
+            "queue": list(self._queue_kinds),  # kinds waiting, the first one in progress
             "model_ready": self.model_ready.is_set() and self.model_error is None,
             "model_error": self.model_error,
             "model_status": self.model_status,
@@ -304,7 +345,7 @@ class Daemon:
                     "hold_error": self.hold_error, "shortcut_method": self.shortcut_method}
         if cmd in KINDS:
             return self._toggle(KINDS[cmd])
-        if cmd in ("start-bug", "start-idea"):
+        if cmd in ("start-bug", "start-todo", "start-dictation"):
             return self.start_recording(cmd.removeprefix("start-"))
         if cmd == "stop":
             return self.stop_recording()
@@ -333,7 +374,7 @@ class Daemon:
             (self.ui.toggle_panel if cmd == "show" else self.ui.open_home)()
             return {"ok": True}
         if cmd == "quit":
-            self.on_quit()
+            threading.Thread(target=self.quit, name="quit", daemon=True).start()
             return {"ok": True, "message": "bye"}
         return {"ok": False, "error": f"unknown command: {cmd!r}"}
 
@@ -347,7 +388,7 @@ class Daemon:
             model += f"; hold-to-record off ({self.hold_error})"
         project = self.store.project(self.active_project_id)
         return (f"{rec}; {model}; {self._pending} transcribing; project {project.name}: "
-                f"{len(self.store.session_notes(project.id))} bug(s); {len(self.store.ideas())} open idea(s)")
+                f"{len(self.store.session_notes(project.id))} bug(s); {len(self.store.todos())} open to-do(s)")
 
     # ---- projects ------------------------------------------------------------
 
@@ -413,7 +454,7 @@ class Daemon:
                 "count": len(notes)}
 
     def copy_note(self, note_id) -> dict:
-        """Copy one note's text (e.g. an idea) without archiving it."""
+        """Copy one note's text (a to-do, a dictation) without archiving it."""
         note = self.store.get(note_id) if isinstance(note_id, int) else None
         if note is None:
             return {"ok": False, "error": "no such note"}
@@ -425,7 +466,7 @@ class Daemon:
             self._notify("Clipboard failed")
             return {"ok": False, "error": f"clipboard failed: {e}"}
         self.sounds.play("stop")
-        what = "idea" if note.kind == "idea" else "note"
+        what = NAMES.get(note.kind, "note")
         self._notify(f"Copied the {what}, now paste it anywhere", "copied")
         return {"ok": True, "message": f"copied {what}"}
 
@@ -491,10 +532,13 @@ class Daemon:
             self.next_project()
 
     def _after_start(self, reply: dict, kind: str) -> None:
-        if reply.get("started") and self.cfg.show_panel_on_record and self.ui is not None:
+        # Never for dictation: you're typing in another app.
+        if reply.get("started") and self.cfg.show_panel_on_record and kind != "dictation" and self.ui is not None:
             self.ui.show_panel(kind)
 
     def _start_recording(self, kind: str) -> dict:
+        if not self.enabled(kind):
+            return {"ok": False, "error": f"{NAMES[kind]} is turned off (Settings → General)"}
         try:
             self.recorder.start()
         except Exception as e:  # noqa: BLE001 - mic problems should not kill the daemon
@@ -525,11 +569,97 @@ class Daemon:
             self._notify("Too short, discarded")
             return {"ok": True, "message": "too short, discarded"}
         self.sounds.play("stop")
-        self._pending += 1
-        self._jobs.put(_Job(kind, audio, self._recording_project))
+        self._enqueue(_Job(kind, audio, self._recording_project))
         log.info("queued %s note (%.1fs audio)", kind, seconds)
         self._notify()
         return {"ok": True, "message": f"transcribing {kind} note ({seconds:.1f}s)"}
+
+    # ---- the queue (kept on disk until each note is saved) ----------------
+
+    def _enqueue(self, job: _Job) -> None:
+        """Queue a recording; call with self._lock held (or before start())."""
+        if job.file is None and self.queue_dir is not None:
+            job.file = self._save_queued(job)
+        self._pending += 1
+        self._queue_kinds.append(job.kind)
+        self._jobs.put(job)
+
+    def _save_queued(self, job: _Job) -> Path | None:
+        try:
+            self.queue_dir.mkdir(parents=True, exist_ok=True)
+            stem = f"{time.strftime('%Y%m%d-%H%M%S')}-{time.monotonic_ns() % 10**9:09d}"
+            wav = self.queue_dir / f"{stem}.wav"
+            save_wav(wav, job.audio)
+            wav.with_suffix(".json").write_text(json.dumps({"kind": job.kind, "project_id": job.project_id}))
+            return wav
+        except OSError:
+            log.exception("could not save the recording to the queue folder")
+            return None
+
+    @staticmethod
+    def _drop_queued(job: _Job) -> None:
+        if job.file is not None:
+            job.file.unlink(missing_ok=True)
+            job.file.with_suffix(".json").unlink(missing_ok=True)
+
+    def _recover_queue(self) -> None:
+        """Queue recordings left over from last time (a crash, restart or quit)."""
+        if self.queue_dir is None or not self.queue_dir.is_dir():
+            return
+        found = 0
+        for wav in sorted(self.queue_dir.glob("*.wav")):
+            try:
+                meta = json.loads(wav.with_suffix(".json").read_text())
+                kind = meta["kind"].replace("idea", "todo")
+                job = _Job(kind, read_wav(str(wav)), meta.get("project_id"), file=wav, recovered=True)
+            except (OSError, ValueError, KeyError):
+                log.exception("unreadable queued recording %s, skipped", wav.name)
+                wav.unlink(missing_ok=True)
+                wav.with_suffix(".json").unlink(missing_ok=True)
+                continue
+            with self._lock:
+                self._enqueue(job)
+            found += 1
+        if found:
+            log.info("transcribing %d recording(s) left from last time", found)
+            self._notify(f"Finishing {found} note(s) from last time…")
+
+    # ---- safety net ----------------------------------------------------
+
+    def _watchdog(self) -> None:
+        while True:
+            time.sleep(5)
+            deadline = self._deadline
+            if deadline is not None and time.monotonic() > deadline:
+                log.error("transcription stuck, restarting FloatNote (queued notes are kept)")
+                self._notify("Transcription got stuck. Restarting FloatNote, your notes are kept…")
+                self.on_stuck()
+                return
+
+    def _restart_when_stuck(self) -> None:
+        if self.queue_dir is None:
+            return  # nothing would survive a restart
+        self.restart()
+        # A stuck thread could keep this process from exiting; make sure it does.
+        threading.Timer(5, lambda: os._exit(0)).start()
+
+    # ---- quit ----------------------------------------------------------
+
+    def quit(self) -> None:
+        """Quit because the user asked (not a restart). When FloatNote reads the
+        keyboard itself, the open/close keys would do nothing until it runs again,
+        so hand them to the desktop to start FloatNote; the next start takes them
+        back (see _sync_shortcuts)."""
+        if self.shortcut_method == "keyboard":
+            from . import shortcuts
+
+            try:
+                if shortcuts.detect_desktop():
+                    shortcuts.install(shortcuts.default_launcher(), self.cfg.toggle_keys)
+                    log.info("open/close keys handed to the desktop until FloatNote starts again")
+            except Exception as e:  # noqa: BLE001 - quitting must always work
+                log.warning("could not hand open/close to the desktop: %s", e)
+        self.on_quit()
 
     def _auto_stop(self) -> None:
         with self._lock:
@@ -558,8 +688,12 @@ class Daemon:
             try:
                 self._transcribe(job)
             finally:
+                self._deadline = None
+                self._drop_queued(job)
                 with self._lock:
                     self._pending -= 1
+                    if self._queue_kinds:
+                        self._queue_kinds.pop(0)
                 self._notify()
 
     def _ensure_model(self) -> bool:
@@ -581,6 +715,7 @@ class Daemon:
             self.sounds.play("error")
             self._notify("Speech model unavailable, note not saved. Run floatnote doctor")
             return
+        self._deadline = time.monotonic() + stuck_after(job.seconds)
         try:
             result = self._transcriber.transcribe(job.audio)
         except Exception:  # noqa: BLE001
@@ -602,10 +737,29 @@ class Daemon:
         # The note's text stays out of the log (privacy); only its size.
         log.info("[%s #%d] %d chars  (%.1fs audio -> %.2fs)", note.kind, note.id, len(note.text),
                  result.audio_seconds, result.elapsed_seconds)
-        if note.kind == "idea":
-            self._notify("Idea saved")
+        if note.kind == "todo":
+            self._notify("To-do saved")
+        elif note.kind == "dictation" and job.recovered:
+            # From before a restart: don't overwrite whatever is on the clipboard now.
+            self._notify("Dictation from before the restart saved")
+            self.desktop_notify("Dictation from before the restart", "It's in FloatNote's Dictation tab.")
+        elif note.kind == "dictation":
+            self._deliver_dictation(note)
         if self.on_note:
             self.on_note(note)
+
+    def _deliver_dictation(self, note: Note) -> None:
+        """Dictation: straight to the clipboard, with a notification that closes itself."""
+        try:
+            self.copy(note.text)
+        except clipboard.ClipboardError as e:
+            log.error("clipboard failed: %s", e)
+            self.sounds.play("error")
+            self._notify("Clipboard failed; the text is in the Dictation tab")
+            self.desktop_notify("Couldn't copy the dictation", "It's saved in FloatNote's Dictation tab.")
+            return
+        self._notify("Dictation copied, paste it anywhere", "copied")
+        self.desktop_notify("Copied, paste it anywhere", notify.preview(note.text))
 
 
     def _keep_recording(self, job: _Job):
@@ -664,7 +818,11 @@ def build_tracker(cfg: Config):
     for a bad shortcut in the config."""
     from .hotkeys import ChordTracker, parse_combo, parse_key_combo
 
-    combos = {parse_combo(cfg.hold_bug): "bug", parse_combo(cfg.hold_idea): "idea"}
+    combos = {parse_combo(cfg.hold_bug): "bug"}
+    if cfg.todo_enabled:
+        combos[parse_combo(cfg.hold_todo)] = "todo"
+    if cfg.dictation_enabled:
+        combos[parse_combo(cfg.hold_dictation)] = "dictation"
     taps = {parse_combo(cfg.copy_keys): "copy"} if cfg.copy_keys else {}
     keys = {}
     for text, name in ((cfg.toggle_keys, "toggle"), (cfg.next_project_keys, "next")):
@@ -754,8 +912,9 @@ def run(cfg: Config, login: bool = False, headless: bool = False) -> int:
         sock.unlink()  # stale file from a crash
     sock.parent.mkdir(parents=True, exist_ok=True)
 
-    store = Store(paths.db_file(), export_path=paths.ideas_export_file())
-    daemon = Daemon(cfg, store)
+    store = Store(paths.db_file(), export_path=paths.todo_export_file())
+    paths.old_ideas_export_file().unlink(missing_ok=True)  # ideas.md became todo.md in 1.3
+    daemon = Daemon(cfg, store, queue_dir=paths.queue_dir())
 
     app = None
     if not headless:
@@ -781,7 +940,7 @@ def run(cfg: Config, login: bool = False, headless: bool = False) -> int:
     try:
         if app is not None:
             daemon.on_quit = app.quit
-            if login and cfg.home_on_login and store.ideas():
+            if login and cfg.home_on_login and cfg.todo_enabled and store.todos():
                 app.open_home()
             app.run()  # GTK main loop; handles SIGTERM/SIGINT itself
         else:

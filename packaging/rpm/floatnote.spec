@@ -124,5 +124,8 @@ fi
 %config(noreplace) %{_sysconfdir}/xdg/autostart/floatnote.desktop
 
 %changelog
+* Mon Nov 16 2026 akashmony01 <akashmony01@users.noreply.github.com> - 1.3.0-1
+- See CHANGELOG.md in the source: dictation, ideas renamed to to-do, no lost notes.
+
 * Mon Nov 16 2026 akashmony01 <akashmony01@users.noreply.github.com> - 1.1.0-1
 - See CHANGELOG.md in the source: GNOME, KDE, Cinnamon and XFCE support, first RPM.

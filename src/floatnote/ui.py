@@ -1,4 +1,4 @@
-"""GTK3 UI: a panel icon and a dropdown next to it with Bugs, Ideas and Projects tabs.
+"""GTK3 UI: a panel icon and a dropdown next to it with Bugs, To-do, Dictation and Projects tabs.
 
 Everything here runs on the GTK main thread. Other threads reach the UI only
 through App.changed() / show_panel() / toggle_panel() / open_home() / quit(),
@@ -252,11 +252,13 @@ class MultiEntry(Gtk.Overlay):
         return False
 
 
-def _pending_row() -> Gtk.Widget:
+def _pending_row(in_progress: bool = True) -> Gtk.Widget:
+    """A recording that isn't text yet: the one being transcribed, or one waiting."""
     row = Gtk.Box(spacing=8, margin=8)
     spinner = Gtk.Spinner()
-    spinner.start()
-    label = Gtk.Label(label="Transcribing…", xalign=0)
+    if in_progress:
+        spinner.start()
+    label = Gtk.Label(label="Transcribing…" if in_progress else "Waiting…", xalign=0)
     label.get_style_context().add_class("fn-pending")
     row.pack_start(spinner, False, False, 0)
     row.pack_start(label, True, True, 0)
@@ -343,7 +345,8 @@ class Dropdown(Gtk.Window):
 
         self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
         self.stack.add_titled(self._build_bugs_page(), "bugs", "Bugs")
-        self.stack.add_titled(self._build_ideas_page(), "ideas", "Ideas")
+        self.stack.add_titled(self._build_todo_page(), "todo", "To-do")
+        self.stack.add_titled(self._build_dictation_page(), "dictation", "Dictation")
         self.stack.add_titled(self._build_projects_page(), "projects", "Projects")
         self.stack.add_named(self._build_settings_page(), "settings")
         self.stack.add_named(self._build_guide_page(), "guide")
@@ -356,8 +359,8 @@ class Dropdown(Gtk.Window):
         tabs.get_style_context().add_class("fn-tabs")
         self._tab_buttons: dict[str, Gtk.RadioButton] = {}
         group = None
-        for name in ("bugs", "ideas", "projects"):
-            b = Gtk.RadioButton(group=group, label=name.capitalize(), draw_indicator=False)
+        for name, title in self.TABS:
+            b = Gtk.RadioButton(group=group, label=title, draw_indicator=False)
             b.set_can_focus(False)
             b.connect("toggled", lambda btn, n=name: btn.get_active() and self.stack.set_visible_child_name(n))
             group = group or b
@@ -418,9 +421,25 @@ class Dropdown(Gtk.Window):
         frame.show_all()
         self.suggest_bar.hide()  # shown when there's a fix to offer
         self.perm_bar.hide()     # shown when hold-to-record lacks permission
+        self.apply_features()    # hide the To-do / Dictation tabs when switched off
         self._sync_expand_button()
 
     # ---- pages ------------------------------------------------------------
+
+    TABS = [("bugs", "Bugs"), ("todo", "To-do"), ("dictation", "Dictation"), ("projects", "Projects")]
+    OPTIONAL_TABS = {"todo": "todo_enabled", "dictation": "dictation_enabled"}
+
+    def apply_features(self):
+        """Show only the tabs (and key rows) of the parts that are switched on."""
+        cfg = self.app.daemon.cfg
+        for name, option in self.OPTIONAL_TABS.items():
+            on = getattr(cfg, option)
+            self._tab_buttons[name].set_visible(on)
+            self.stack.get_child_by_name(name).set_visible(on)
+            if not on and self.stack.get_visible_child_name() == name:
+                self._tab_buttons["bugs"].set_active(True)
+        for which, row in getattr(self, "_key_rows", {}).items():
+            row.set_visible(self.app.daemon.enabled(which))
 
     def _build_bugs_page(self) -> Gtk.Widget:
         self.bug_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
@@ -449,12 +468,12 @@ class Dropdown(Gtk.Window):
         page.pack_start(footer, False, False, 0)
         return page
 
-    def _build_ideas_page(self) -> Gtk.Widget:
-        self.new_idea = MultiEntry("Type an idea and press Enter (Shift+Enter for a new line)", self._add_idea)
+    def _build_todo_page(self) -> Gtk.Widget:
+        self.new_todo = MultiEntry("Type a to-do and press Enter (Shift+Enter for a new line)", self._add_todo)
 
-        self.idea_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
-        self.idea_hint = _hint("")
-        self.idea_list.set_placeholder(self.idea_hint)
+        self.todo_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        self.todo_hint = _hint("")
+        self.todo_list.set_placeholder(self.todo_hint)
 
         self.show_done = Gtk.CheckButton(label="Show done")
         self.show_done.connect("toggled", lambda *_: self.refresh())
@@ -462,9 +481,27 @@ class Dropdown(Gtk.Window):
         footer.pack_start(self.show_done, False, False, 0)
 
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        page.pack_start(self.new_idea, False, False, 0)
+        page.pack_start(self.new_todo, False, False, 0)
         page.pack_start(Gtk.Separator(), False, False, 0)
-        page.pack_start(_scrolled(self.idea_list), True, True, 0)
+        page.pack_start(_scrolled(self.todo_list), True, True, 0)
+        page.pack_start(Gtk.Separator(), False, False, 0)
+        page.pack_start(footer, False, False, 0)
+        return page
+
+    def _build_dictation_page(self) -> Gtk.Widget:
+        self.dictation_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        self.dictation_hint = _hint("")
+        self.dictation_list.set_placeholder(self.dictation_hint)
+        clear = Gtk.Button(label="Clear history")
+        clear.connect("clicked", lambda *_: self._clear_dictations())
+        self.dictation_count = Gtk.Label(xalign=0)
+        self.dictation_count.get_style_context().add_class("fn-date")
+        footer = Gtk.Box(spacing=4, margin=6)
+        footer.pack_start(self.dictation_count, True, True, 4)
+        footer.pack_end(clear, False, False, 0)
+
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        page.pack_start(_scrolled(self.dictation_list), True, True, 0)
         page.pack_start(Gtk.Separator(), False, False, 0)
         page.pack_start(footer, False, False, 0)
         return page
@@ -508,7 +545,8 @@ class Dropdown(Gtk.Window):
 
     # ---- settings page ------------------------------------------------------
 
-    KEY_ROWS = [("bug", "Record a bug", "hold"), ("idea", "Record an idea", "hold"),
+    KEY_ROWS = [("bug", "Record a bug", "hold"), ("todo", "Record a to-do", "hold"),
+                ("dictation", "Dictate (copied to the clipboard)", "hold"),
                 ("copy", "Copy all bugs", "press, let go"), ("toggle", "Open / close", "press"),
                 ("next", "Next project", "press")]
 
@@ -549,6 +587,7 @@ class Dropdown(Gtk.Window):
         page = pages["keys"]
         self._key_values: dict[str, Gtk.Label] = {}
         self._key_buttons: dict[str, Gtk.Button] = {}
+        self._key_rows: dict[str, Gtk.Widget] = {}
         for which, title, how in self.KEY_ROWS:
             # Two lines per shortcut so it fits the compact dropdown:
             #   Record a bug (hold)          [Change]
@@ -566,6 +605,7 @@ class Dropdown(Gtk.Window):
             row.pack_start(texts, True, True, 0)
             row.pack_end(button, False, False, 0)
             page.pack_start(row, False, False, 0)
+            self._key_rows[which] = row
             self._key_values[which] = value
             self._key_buttons[which] = button
         self.key_error = Gtk.Label(xalign=0, wrap=True, max_width_chars=1, margin_start=10, margin_end=10)
@@ -614,11 +654,27 @@ class Dropdown(Gtk.Window):
         self.login_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
         self.login_switch.connect("notify::active", lambda sw, _p: not self._loading_settings
                                   and self.app.daemon.set_option("home_on_login", sw.get_active()))
-        for label, switch in (("Show the project on the panel icon", self.bar_switch),
-                              ("Start / stop sounds", self.sounds_switch),
-                              ("Show ideas at login", self.login_switch)):
+        self.todo_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
+        self.todo_switch.connect("notify::active", lambda sw, _p: not self._loading_settings
+                                 and self._set_feature("todo_enabled", sw.get_active()))
+        self.dictation_switch = Gtk.Switch(valign=Gtk.Align.CENTER)
+        self.dictation_switch.connect("notify::active", lambda sw, _p: not self._loading_settings
+                                      and self._set_feature("dictation_enabled", sw.get_active()))
+        for label, about, switch in (
+                ("To-do list", "Hold the to-do keys to add one; tick them off when done.", self.todo_switch),
+                ("Dictation", "Hold the dictation keys and talk: the text is copied, "
+                              "ready to paste into any app.", self.dictation_switch),
+                ("Show the project on the panel icon", "", self.bar_switch),
+                ("Start / stop sounds", "", self.sounds_switch),
+                ("Show to-dos at login", "", self.login_switch)):
+            texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            texts.pack_start(Gtk.Label(label=label, xalign=0, wrap=True, max_width_chars=1), False, False, 0)
+            if about:
+                sub = Gtk.Label(label=about, xalign=0, wrap=True, max_width_chars=1)
+                sub.get_style_context().add_class("fn-date")
+                texts.pack_start(sub, False, False, 0)
             row = Gtk.Box(spacing=8, margin_start=10, margin_end=10, margin_top=8)
-            row.pack_start(Gtk.Label(label=label, xalign=0, wrap=True, max_width_chars=1), True, True, 0)
+            row.pack_start(texts, True, True, 0)
             row.pack_end(switch, False, False, 0)
             page.pack_start(row, False, False, 0)
 
@@ -645,15 +701,18 @@ class Dropdown(Gtk.Window):
             self.sounds_switch.set_active(cfg.sounds)
             self.bar_switch.set_active(cfg.show_project_in_bar)
             self.login_switch.set_active(cfg.home_on_login)
+            self.todo_switch.set_active(cfg.todo_enabled)
+            self.dictation_switch.set_active(cfg.dictation_enabled)
         finally:
             self._loading_settings = False
 
     def _show_keys(self):
         from .hotkeys import pretty_combo
 
+        from .daemon import KEY_FIELDS
+
         cfg = self.app.daemon.cfg
-        values = {"bug": cfg.hold_bug, "idea": cfg.hold_idea, "copy": cfg.copy_keys, "toggle": cfg.toggle_keys,
-                  "next": cfg.next_project_keys}
+        values = {which: getattr(cfg, field) for which, field in KEY_FIELDS.items()}
         for which, label in self._key_values.items():
             label.set_text(pretty_combo(values[which]))
         # Without keyboard access the hold keys can't work (or be captured);
@@ -746,6 +805,13 @@ class Dropdown(Gtk.Window):
             ctx.remove_class("fn-date")
         self.key_error.set_text(text)
 
+    def _set_feature(self, option: str, on: bool):
+        self.app.daemon.set_option(option, on)
+        self.apply_features()
+        name = {"todo_enabled": "To-do list", "dictation_enabled": "Dictation"}[option]
+        self.flash(f"{name} {'on' if on else 'off'}")
+        self.refresh()
+
     def _set_bar_label(self, on: bool):
         self.app.daemon.set_option("show_project_in_bar", on)
         self.app._update_indicators()
@@ -815,9 +881,17 @@ class Dropdown(Gtk.Window):
              f"Hold {key(cfg.hold_bug)}, describe what's wrong, then let go.\n\n"
              "The mic icon in your panel turns <b>red</b> while recording and <b>yellow</b> while "
              "it writes the text. The note lands in the <b>Bugs</b> tab."),
-            ("Save an idea",
-             f"Hold {key(cfg.hold_idea)} and say the idea. The icon turns <b>blue</b>.\n\n"
-             "Ideas stay in the <b>Ideas</b> tab until you tick them done, and show up when you log in."),
+            ("Add a to-do",
+             f"Hold {key(cfg.hold_todo)} and say what you want to do. The icon turns <b>blue</b>.\n\n"
+             "To-dos stay in the <b>To-do</b> tab until you tick them done, and show up when you log in. "
+             "Don't need them? Switch the list off in ⚙ Settings → General."),
+            ("Dictate into any app",
+             (f"Hold {key(cfg.hold_dictation)} and talk. The icon turns <b>purple</b>; let go and the "
+              "text is copied, ready to paste into a chat, an email, anything. Past dictations are in "
+              "the <b>Dictation</b> tab."
+              if cfg.dictation_enabled else
+              "Want to type by voice in other apps? Switch on <b>Dictation</b> in ⚙ Settings → General: "
+              f"hold {key(cfg.hold_dictation)}, talk, let go, and the text is copied, ready to paste.")),
             ("Copy the bugs for Claude",
              f"Press {key(cfg.copy_keys)} together and let go. All bugs are copied as a numbered "
              "list and the icon flashes <b>green</b>. Paste them anywhere, e.g. into Claude Code.\n\n"
@@ -877,8 +951,10 @@ class Dropdown(Gtk.Window):
         self.power_warning = Gtk.Label(xalign=0, wrap=True, max_width_chars=28, margin=4)
         self.power_warning.get_style_context().add_class("fn-hint")
         box.pack_start(self.power_warning, False, False, 0)
+        # Quit may first hand the open/close keys to the desktop (a second or two).
+        quit_ = lambda: threading.Thread(target=self.app.daemon.quit, daemon=True).start()  # noqa: E731
         for label, action in (("Restart FloatNote", lambda: self.app.daemon.restart()),
-                              ("Quit FloatNote", lambda: self.app.daemon.on_quit())):
+                              ("Quit FloatNote", quit_)):
             item = Gtk.ModelButton(text=label)
             item.connect("clicked", lambda *_, a=action: GLib.idle_add(lambda: a() and False))
             box.pack_start(item, False, False, 0)
@@ -887,7 +963,8 @@ class Dropdown(Gtk.Window):
 
         def on_show(*_):
             pending = self.app.daemon.ui_state()["pending"]
-            self.power_warning.set_text(f"{pending} note(s) still transcribing will be lost." if pending else "")
+            self.power_warning.set_text(f"{pending} note(s) still transcribing: they'll be finished "
+                                        "the next time FloatNote starts." if pending else "")
             self.power_warning.set_visible(bool(pending))
 
         popover.connect("show", on_show)
@@ -1089,8 +1166,10 @@ class Dropdown(Gtk.Window):
         cfg = self.app.daemon.cfg
         self.bug_hint.set_text(f"No bugs yet.\nHold {pretty_combo(cfg.hold_bug)} and describe the issue,\n"
                                "let go when you're done.")
-        self.idea_hint.set_text(f"No open ideas.\nHold {pretty_combo(cfg.hold_idea)} and say what you want "
-                                "to build.")
+        self.todo_hint.set_text(f"Nothing to do.\nHold {pretty_combo(cfg.hold_todo)} and say what you "
+                                "want to do.")
+        self.dictation_hint.set_text(f"No dictations yet.\nHold {pretty_combo(cfg.hold_dictation)}, talk, let go:\n"
+                                     "the text is copied, ready to paste anywhere.")
         self.copy_btn.set_tooltip_text(f"Copy all bugs, then clear the list (press "
                                        f"{pretty_combo(cfg.copy_keys)} and let go)")
 
@@ -1098,7 +1177,7 @@ class Dropdown(Gtk.Window):
         store = self.app.store
         project = store.project(store.active_project_id())
         bugs = store.session_notes(project.id)
-        open_ideas = store.ideas()
+        open_todos = store.todos()
         self._update_key_hints()
         self.copy_btn.set_label(f"Copy all ({len(bugs)})" if bugs else "Copy all")
         self.copy_btn.set_sensitive(bool(bugs))
@@ -1114,34 +1193,73 @@ class Dropdown(Gtk.Window):
         if self._editing is not None:
             self._dirty = True
             return
-        self._fill_bugs(bugs)
-        self._fill_ideas(store.ideas(include_done=True) if self.show_done.get_active() else open_ideas)
+        queue = self.app.daemon.ui_state()["queue"]
+        self._fill_bugs(bugs, queue)
+        self._fill_todos(store.todos(include_done=True) if self.show_done.get_active() else open_todos, queue)
+        self._fill_dictations(store.dictations(), queue)
         self._fill_words()
         self._fill_projects()
 
-    def _fill_bugs(self, bugs):
+    @staticmethod
+    def _add_pending(listbox, queue: list[str], kind: str):
+        """Rows for this kind's recordings still in the queue (the first in it is being transcribed)."""
+        for i, k in enumerate(queue):
+            if k == kind:
+                listbox.add(_pending_row(in_progress=i == 0))
+
+    def _fill_bugs(self, bugs, queue=()):
         _clear(self.bug_list)
-        for _ in range(self.app.daemon.ui_state()["pending"]):
-            self.bug_list.add(_pending_row())
+        self._add_pending(self.bug_list, list(queue), "bug")
         # Newest first; numbers match the copied list (which is oldest first).
         for i, note in reversed(list(enumerate(bugs, 1))):
             num = Gtk.Label(label=f"{i}.")
             num.get_style_context().add_class("fn-num")
-            to_idea = _icon_button("starred-symbolic", "Move to ideas", lambda note=note: self._to_idea(note))
+            to_todo = _icon_button("starred-symbolic", "Move to to-do", lambda note=note: self._to_todo(note))
             self.bug_list.add(NoteRow(note, num, on_save=self._save, on_delete=self._delete_bug,
-                                      on_edit_state=self._edit_state, extra_buttons=[to_idea]))
+                                      on_edit_state=self._edit_state, extra_buttons=[to_todo]))
         self.bug_list.show_all()
 
-    def _fill_ideas(self, ideas):
-        _clear(self.idea_list)
-        for note in sorted(ideas, key=lambda n: n.done):  # open first, newest first within
+    def _fill_todos(self, todos, queue=()):
+        _clear(self.todo_list)
+        self._add_pending(self.todo_list, list(queue), "todo")
+        for note in sorted(todos, key=lambda n: n.done):  # open first, newest first within
             check = Gtk.CheckButton(active=note.done, tooltip_text="Done")
             check.connect("toggled", lambda b, note=note: self._set_done(note, b.get_active()))
-            copy = _icon_button("edit-copy-symbolic", "Copy this idea", lambda note=note: self._copy_note(note))
-            self.idea_list.add(NoteRow(note, check, on_save=self._save, on_delete=self._delete_idea,
+            copy = _icon_button("edit-copy-symbolic", "Copy this to-do", lambda note=note: self._copy_note(note))
+            self.todo_list.add(NoteRow(note, check, on_save=self._save, on_delete=self._delete_todo,
                                        on_edit_state=self._edit_state, subtitle=note.created_at[:10],
                                        extra_buttons=[copy]))
-        self.idea_list.show_all()
+        self.todo_list.show_all()
+
+    def _fill_dictations(self, dictations, queue=()):
+        from .store import DICTATION_KEEP
+
+        _clear(self.dictation_list)
+        self._add_pending(self.dictation_list, list(queue), "dictation")
+        for note in dictations:  # newest first
+            lead = Gtk.Image.new_from_icon_name("audio-input-microphone-symbolic", Gtk.IconSize.BUTTON)
+            copy = _icon_button("edit-copy-symbolic", "Copy again", lambda note=note: self._copy_note(note))
+            self.dictation_list.add(NoteRow(note, lead, on_save=self._save, on_delete=self._delete_bug,
+                                            on_edit_state=self._edit_state,
+                                            subtitle=note.created_at[:16].replace("T", " "),
+                                            extra_buttons=[copy]))
+        self.dictation_list.show_all()
+        self.dictation_count.set_text(f"Keeps the last {DICTATION_KEEP}" if dictations else "")
+
+    def _clear_dictations(self):
+        if not self.app.store.dictations():
+            return
+        dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
+                                   buttons=Gtk.ButtonsType.OK_CANCEL, text="Clear the dictation history?")
+        dialog.format_secondary_text("All past dictations are deleted. What you copied stays on the clipboard.")
+
+        def answered(response):
+            if response == Gtk.ResponseType.OK:
+                self.app.store.clear_dictations()
+                self.flash("Dictation history cleared")
+                _idle(self.refresh)
+
+        self._run_dialog(dialog, answered)
 
     def _fill_words(self):
         cfg = self.app.daemon.cfg
@@ -1171,9 +1289,9 @@ class Dropdown(Gtk.Window):
         self.app.store.delete(note.id)
         _idle(self.refresh)
 
-    def _delete_idea(self, note):
+    def _delete_todo(self, note):
         dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
-                                   buttons=Gtk.ButtonsType.OK_CANCEL, text="Delete this idea?")
+                                   buttons=Gtk.ButtonsType.OK_CANCEL, text="Delete this to-do?")
         dialog.format_secondary_text(note.text)
         dialog.set_keep_above(True)
         self._dialog_open = True
@@ -1363,18 +1481,21 @@ class Dropdown(Gtk.Window):
             self._dialog_open = False
             self._focus()
 
-    def _to_idea(self, note):
-        self.app.store.set_kind(note.id, "idea")
-        self.flash("Moved to Ideas")
+    def _to_todo(self, note):
+        if not self.app.daemon.cfg.todo_enabled:
+            self.flash("The to-do list is off (Settings → General)")
+            return
+        self.app.store.set_kind(note.id, "todo")
+        self.flash("Moved to To-do")
         _idle(self.refresh)
 
     def _set_done(self, note, done):
         self.app.store.set_done(note.id, done)
         _idle(self.refresh)
 
-    def _add_idea(self, text: str):
-        self.app.store.add("idea", text)
-        self.flash("Idea saved")
+    def _add_todo(self, text: str):
+        self.app.store.add("todo", text)
+        self.flash("To-do saved")
         _idle(self.refresh)
 
     def _add_bug(self, text: str):
@@ -1445,7 +1566,9 @@ class Dropdown(Gtk.Window):
         state = self.app.daemon.ui_state()
         if state["recording"]:
             secs = int(time.monotonic() - state["started_at"])
-            text = f"● Recording {state['recording']}  {secs // 60}:{secs % 60:02d}"
+            from .daemon import NAMES
+
+            text = f"● Recording {NAMES.get(state['recording'], state['recording'])}  {secs // 60}:{secs % 60:02d}"
         elif time.monotonic() < self._flash_until:
             text = self._flash
         elif state["model_error"]:
@@ -1453,7 +1576,7 @@ class Dropdown(Gtk.Window):
         elif not state["model_ready"]:
             text = state.get("model_status") or "Loading speech model…"
         elif state["pending"]:
-            text = "Transcribing…"
+            text = "Transcribing…" if state["pending"] == 1 else f"Transcribing… ({state['pending'] - 1} waiting)"
         elif state["hold_error"]:
             text = "Hold keys off: run floatnote doctor"
         else:
@@ -1502,13 +1625,13 @@ class App:
         _idle(self._changed, message, event)
 
     def show_panel(self, kind: str | None = None) -> None:
-        _idle(self.dropdown.open_dropdown, None, {"bug": "bugs", "idea": "ideas"}.get(kind))
+        _idle(self.dropdown.open_dropdown, None, {"bug": "bugs", "todo": "todo", "dictation": "dictation"}.get(kind))
 
     def toggle_panel(self) -> None:
         _idle(self.dropdown.toggle)
 
     def open_home(self) -> None:
-        _idle(self.dropdown.open_dropdown, None, "ideas")
+        _idle(self.dropdown.open_dropdown, None, "todo")
 
     def quit(self) -> None:
         _idle(Gtk.main_quit)
@@ -1535,7 +1658,9 @@ class App:
         project = self.store.project(self.store.active_project_id())
         bugs = len(self.store.session_notes(project.id))
         if state["recording"]:
-            icon, body = state["recording"], f"Recording {state['recording']}…"
+            from .daemon import NAMES
+
+            icon, body = state["recording"], f"Recording {NAMES.get(state['recording'], state['recording'])}…"
         elif time.monotonic() < self._green_until:
             icon, body = "ok", "Copied"
         elif state["pending"] or not state["model_ready"]:
